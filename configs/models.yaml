@@ -1,0 +1,234 @@
+# =========================================================================== #
+# Model registry.
+#
+# Every artefact the service can load is declared here with an immutable
+# version tag and a download source.
+#
+# INTEGRITY
+# ---------
+# Digests are NOT hard-coded in this file. Publishing a digest you have not
+# personally computed is worse than publishing none: it looks like a
+# verification and is not one. Instead:
+#
+#   1. `python scripts/download_models.py` fetches each artefact and computes
+#      its SHA-256.
+#   2. The computed digests are written to `configs/model_digests.lock.yaml`.
+#   3. That lock file is committed and code-reviewed. From then on every load
+#      is verified against it, and a mismatch is a hard refusal.
+#
+# This is trust-on-first-download followed by pinning - the same model every
+# language package manager uses, and the only honest one available when the
+# upstream publisher does not sign its releases.
+#
+# The `version` strings are surfaced verbatim in the API response under
+# `model_versions`, giving the Backend a reproducible audit trail.
+# =========================================================================== #
+
+model_store:
+  root: ./model_store
+  # Fail fast at startup rather than on the first request.
+  verify_checksum: true
+  download_timeout_seconds: 600
+  # Where the InsightFace model zoo packs come from.
+  insightface_pack_url: "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
+
+models:
+
+  # ----------------------------------------------------------------- #
+  # MODULE 1 - FACE DETECTION
+  # ----------------------------------------------------------------- #
+
+  # Primary detector. SCRFD-10GF from the InsightFace buffalo_l pack.
+  # Anchor-free, single-stage, sample-redistribution training. Outputs a
+  # bounding box, an objectness score and 5 facial keypoints per face.
+  face_detector_scrfd:
+    enabled: true
+    required: true
+    kind: onnx
+    version: "scrfd_10g_bnkps-insightface-0.7"
+    # Relative to model_store.root. Produced by unpacking buffalo_l.zip.
+    path: "buffalo_l/det_10g.onnx"
+    sha256: null                     # pinned in configs/model_digests.lock.yaml
+    source:
+      type: insightface_pack
+      pack: buffalo_l
+      member: det_10g.onnx
+    input:
+      # SCRFD is fully convolutional; 640x640 is the accuracy/latency sweet
+      # spot for 720p-1080p phone captures.
+      size: [640, 640]
+      # blobFromImage(scale=1/128, mean=127.5, swapRB=True)
+      mean: 127.5
+      scale: 0.0078125
+      swap_rb: true
+    output:
+      # Feature-map count: 3 FPN levels -> 9 output tensors (score/bbox/kps).
+      fmc: 3
+      strides: [8, 16, 32]
+      num_anchors: 2
+      use_kps: true
+    runtime:
+      dynamic_input: true
+      batch_capable: false
+
+  # First fallback. YOLOv8-n face, exported to ONNX at 640x640.
+  # Used when SCRFD is unavailable or when `detection.primary: yolo`.
+  #
+  # SOURCE IS `manual` DELIBERATELY. There is no canonical, signed, stable
+  # release of a YOLO-face ONNX export; the community mirrors move and 404.
+  # Pinning a URL that may silently start serving different weights into an
+  # identity-verification system is not acceptable, so you export it yourself:
+  #
+  #   pip install ultralytics
+  #   yolo export model=yolov8n-face.pt format=onnx imgsz=640 opset=12
+  #   mkdir -p model_store/yolo && mv yolov8n-face.onnx model_store/yolo/
+  #   python scripts/download_models.py --write-lock
+  #
+  # The adapter is fully implemented and unit-tested against synthetic tensors;
+  # it activates the moment the file appears. Until then the chain runs
+  # scrfd -> opencv_dnn -> haar, which is why `required` is false.
+  face_detector_yolo:
+    enabled: true
+    required: false
+    kind: onnx
+    version: "yolov8n_face-1.0"
+    path: "yolo/yolov8n-face.onnx"
+    sha256: null                     # pinned in configs/model_digests.lock.yaml
+    source:
+      type: manual
+    input:
+      size: [640, 640]
+      mean: 0.0
+      scale: 0.00392156862745098      # 1/255
+      swap_rb: true
+      letterbox: true
+    output:
+      # (1, 20, 8400): 4 box + 1 conf + 5*3 keypoints
+      layout: yolov8_pose
+      num_keypoints: 5
+    runtime:
+      dynamic_input: false
+      batch_capable: true
+
+  # Second fallback. OpenCV's ResNet-10 SSD. No landmarks, box only.
+  face_detector_opencv_dnn:
+    enabled: true
+    required: false
+    kind: caffe
+    version: "res10_300x300_ssd_iter_140000"
+    path: "opencv/res10_300x300_ssd_iter_140000.caffemodel"
+    config_path: "opencv/deploy.prototxt"
+    sha256: null                     # pinned in configs/model_digests.lock.yaml
+    source:
+      type: multi_url
+      urls:
+        - dest: "opencv/res10_300x300_ssd_iter_140000.caffemodel"
+          url: "https://raw.githubusercontent.com/opencv/opencv_3rdparty/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel"
+        - dest: "opencv/deploy.prototxt"
+          url: "https://raw.githubusercontent.com/opencv/opencv/4.x/samples/dnn/face_detector/deploy.prototxt"
+    input:
+      size: [300, 300]
+      mean: [104.0, 177.0, 123.0]
+      scale: 1.0
+      swap_rb: false
+    runtime:
+      dynamic_input: false
+      batch_capable: false
+
+  # Last-resort fallback. Ships inside the opencv wheel - always present,
+  # needs no download, guarantees the service degrades instead of failing.
+  face_detector_haar:
+    enabled: true
+    required: false
+    kind: haar_cascade
+    version: "opencv-haarcascade-frontalface-default"
+    # Resolved from cv2.data.haarcascades at load time.
+    path: "haarcascade_frontalface_default.xml"
+    eye_cascade_path: "haarcascade_eye_tree_eyeglasses.xml"
+    sha256: null
+    source:
+      type: bundled
+
+  # Optional dedicated occlusion / facial-attribute classifier. When a path is
+  # configured the OcclusionAnalyzer prefers it and uses the geometric
+  # estimator only as a cross-check. Absent by default; the geometric
+  # estimator is fully functional on its own.
+  face_occlusion_classifier:
+    enabled: false
+    required: false
+    kind: onnx
+    version: "custom-occlusion-v0"
+    path: "occlusion/face_occlusion.onnx"
+    sha256: null
+    source:
+      type: manual
+    input:
+      size: [112, 112]
+      mean: 127.5
+      scale: 0.0078125
+      swap_rb: true
+    output:
+      # Sigmoid logits, one per region, in this exact order.
+      regions: [forehead, left_eye, right_eye, nose, mouth, chin]
+
+  # ----------------------------------------------------------------- #
+  # MODULE 3 - FACE RECOGNITION (declared now, wired in Module 3)
+  # ----------------------------------------------------------------- #
+
+  face_embedder_arcface:
+    enabled: true
+    required: true
+    kind: onnx
+    version: "arcface_r100_glint360k-buffalo_l-0.7"
+    path: "buffalo_l/w600k_r50.onnx"
+    sha256: null                     # pinned in configs/model_digests.lock.yaml
+    source:
+      type: insightface_pack
+      pack: buffalo_l
+      member: w600k_r50.onnx
+    input:
+      size: [112, 112]
+      mean: 127.5
+      scale: 0.0078125
+      swap_rb: true
+    output:
+      embedding_dim: 512
+      l2_normalize: true
+    runtime:
+      dynamic_input: false
+      batch_capable: true
+      max_batch: 16
+
+  # ----------------------------------------------------------------- #
+  # Deterministic execution-provider preference, best first.
+  # Unavailable providers are skipped silently; CPU is always terminal.
+  # ----------------------------------------------------------------- #
+
+execution_providers:
+  cuda:
+    - name: TensorrtExecutionProvider
+      options:
+        trt_fp16_enable: true
+        trt_engine_cache_enable: true
+        trt_engine_cache_path: "./model_store/.trt_cache"
+    - name: CUDAExecutionProvider
+      options:
+        device_id: 0
+        arena_extend_strategy: kSameAsRequested
+        cudnn_conv_algo_search: HEURISTIC
+        do_copy_in_default_stream: true
+    - name: CPUExecutionProvider
+      options: {}
+  directml:
+    - name: DmlExecutionProvider
+      options: { device_id: 0 }
+    - name: CPUExecutionProvider
+      options: {}
+  coreml:
+    - name: CoreMLExecutionProvider
+      options: {}
+    - name: CPUExecutionProvider
+      options: {}
+  cpu:
+    - name: CPUExecutionProvider
+      options: {}

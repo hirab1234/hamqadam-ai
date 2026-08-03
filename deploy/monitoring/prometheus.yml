@@ -1,0 +1,27 @@
+# Prometheus scrape configuration.
+#
+# The scrape interval is 15 s against a service whose slowest operation takes
+# roughly 4 s. That is deliberate: histograms need several observations per
+# scrape to be worth anything, and at 15 s a burst of failures is visible
+# within one alert evaluation rather than several minutes later.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    service: hamqadam-ai-verification
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: hamqadam-ai
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+        labels:
+          component: api
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

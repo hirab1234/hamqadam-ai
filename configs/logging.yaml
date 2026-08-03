@@ -1,0 +1,82 @@
+# =========================================================================== #
+# Structured logging configuration.
+#
+# Every log line is a JSON object in production and a coloured key/value line
+# in development. A redaction processor strips PII before serialisation so
+# CNIC numbers, names and raw image bytes can never reach stdout or a log sink.
+# =========================================================================== #
+
+logging:
+  level: INFO                       # DEBUG | INFO | WARNING | ERROR | CRITICAL
+  # json -> machine readable (production). console -> coloured (development).
+  renderer: json
+  # Emit a UTC ISO-8601 timestamp with millisecond precision.
+  timestamp_format: iso
+  utc: true
+  # Include filename:lineno on WARNING and above.
+  include_call_site_from: WARNING
+
+  # Per-logger overrides. Third-party libraries are noisy at INFO.
+  levels:
+    uvicorn.access: WARNING
+    uvicorn.error: INFO
+    onnxruntime: WARNING
+    paddleocr: WARNING
+    ppocr: WARNING
+    PIL: WARNING
+    matplotlib: WARNING
+    httpx: WARNING
+    urllib3: WARNING
+
+  # ------------------------------------------------------------------- #
+  # PII redaction. Keys are matched case-insensitively against event-dict
+  # keys at every nesting depth.
+  # ------------------------------------------------------------------- #
+  redaction:
+    enabled: true
+    # Replaced wholesale with the mask string.
+    drop_keys:
+      - image
+      - images
+      - image_bytes
+      - cnic_image
+      - profile_image
+      - live_selfie
+      - secondary_images
+      - embedding
+      - embeddings
+      - password
+      - api_key
+      - authorization
+      - secret
+      - token
+    # Replaced with a partially masked value (first 2 / last 2 chars kept).
+    mask_keys:
+      - cnic_number
+      - name
+      - full_name
+      - father_name
+      - date_of_birth
+      - user_id
+      - email
+      - phone
+    mask: "[REDACTED]"
+    # Regexes applied to every *string* value as a last line of defence.
+    # Pakistani CNIC (12345-1234567-1) and bare 13-digit forms.
+    patterns:
+      - name: cnic
+        regex: '\b\d{5}-?\d{7}-?\d\b'
+        replacement: "[CNIC]"
+      - name: email
+        regex: '\b[\w.+-]+@[\w-]+\.[\w.-]+\b'
+        replacement: "[EMAIL]"
+      - name: bearer
+        regex: '(?i)bearer\s+[A-Za-z0-9._~+/-]+=*'
+        replacement: "Bearer [REDACTED]"
+
+  # Access log for the audit trail required by the security spec. Contains
+  # who called, when, which verification_id, and the outcome - never payloads.
+  access_log:
+    enabled: true
+    logger_name: hamqadam.access
+    include_headers: ["user-agent", "x-request-id", "x-forwarded-for"]

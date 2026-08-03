@@ -1,0 +1,40 @@
+# --------------------------------------------------------------------------- #
+# Developer machines that do NOT have the reference Python 3.12 interpreter.
+#
+# `base.txt` is pinned exactly for the 3.12 production image, where numpy is
+# held at 1.26 because paddlepaddle 2.6 requires numpy<2. On Python 3.13 there
+# is no numpy 1.26 wheel, so this overlay relaxes the numeric stack to the
+# numpy 2.x line. The OCR extras in `ml.txt` are NOT installable under this
+# overlay - use Docker, or a 3.12 interpreter, to work on Module 5.
+#
+#   python -m venv .venv
+#   .venv/Scripts/activate          # Windows
+#   pip install -r requirements/local.txt -r requirements/dev.txt
+# --------------------------------------------------------------------------- #
+
+fastapi>=0.115.6,<0.117
+uvicorn[standard]>=0.34.0,<0.36
+python-multipart>=0.0.20
+pydantic>=2.10.4,<3
+pydantic-settings>=2.7.0,<3
+orjson>=3.10.13
+
+numpy>=2.1.3,<3
+# UPPER BOUND IS LOAD-BEARING. OpenCV 5.0 removed the legacy objdetect and
+# Caffe importer APIs outright: `cv2.CascadeClassifier` and
+# `cv2.dnn.readNetFromCaffe` no longer exist. That silently deletes two of the
+# four detectors in the fallback chain. Both adapters now detect the absence
+# and disable themselves rather than crashing, but the 4.x line is the
+# supported target and is what the production image pins.
+opencv-python-headless>=4.11.0.86,<5
+Pillow>=11.0.0
+scipy>=1.14.1
+
+onnxruntime>=1.20.1
+
+structlog>=24.4.0
+PyYAML>=6.0.2
+tenacity>=9.0.0
+anyio>=4.7.0
+httpx>=0.28.1
+prometheus-client>=0.21.1

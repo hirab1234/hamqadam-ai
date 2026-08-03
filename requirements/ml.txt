@@ -1,0 +1,26 @@
+# --------------------------------------------------------------------------- #
+# Heavyweight ML stack: recognition, OCR, vector search, messaging.
+# Installed in the production image; optional for unit-test-only environments.
+#   pip install -r requirements/base.txt -r requirements/ml.txt
+# --------------------------------------------------------------------------- #
+
+-r base.txt
+
+# --- Face recognition ------------------------------------------------------ #
+insightface==0.7.3
+scikit-image==0.24.0
+torch==2.5.1
+torchvision==0.20.1
+
+# --- OCR ------------------------------------------------------------------- #
+paddlepaddle==2.6.2
+paddleocr==2.9.1
+easyocr==1.7.2
+
+# --- Vector database / cache / queue --------------------------------------- #
+qdrant-client==1.12.2
+redis[hiredis]==5.2.1
+aio-pika==9.5.4
+
+# --- Experiment tracking --------------------------------------------------- #
+mlflow==2.19.0

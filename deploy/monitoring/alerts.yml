@@ -1,0 +1,137 @@
+# Alerting rules.
+#
+# Every rule alerts on a symptom a person would act on, not on a number being
+# unusual. An alert nobody acts on trains the on-call to ignore the channel,
+# which is how a real outage gets missed.
+#
+# The `for:` clauses are long on purpose. This service's slowest operation is
+# several seconds, so a one-minute window over a low request rate is mostly
+# noise.
+
+groups:
+  - name: hamqadam-availability
+    interval: 30s
+    rules:
+      - alert: ServiceDown
+        expr: up{job="hamqadam-ai"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "AI verification service is not responding to scrapes"
+          description: >-
+            Prometheus cannot reach {{ $labels.instance }}. Verifications are
+            almost certainly failing. Check the container and /ready.
+
+      - alert: HighErrorRate
+        expr: >-
+          sum(rate(hamqadam_errors_total[10m]))
+            / clamp_min(sum(rate(hamqadam_verifications_total[10m]))
+                        + sum(rate(hamqadam_errors_total[10m])), 0.001)
+            > 0.10
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "More than 10% of requests are failing"
+          description: >-
+            Sustained over ten minutes. `clamp_min` keeps the ratio finite when
+            traffic is zero - without it an idle service divides by zero and
+            pages someone at 3am about nothing.
+
+      - alert: ModelNotLoaded
+        expr: increase(hamqadam_errors_total{code="MODEL_NOT_LOADED"}[15m]) > 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Requests are arriving before models finished loading"
+          description: >-
+            Traffic is reaching a replica that is not ready. The readiness
+            probe is probably not wired to /ready.
+
+  - name: hamqadam-latency
+    interval: 30s
+    rules:
+      - alert: SlowVerifications
+        expr: >-
+          histogram_quantile(0.95,
+            sum(rate(hamqadam_verification_seconds_bucket[10m])) by (le)) > 15
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "p95 verification latency above 15s"
+          description: >-
+            The 95th percentile, not the mean. A mean latency hides the tail,
+            and the tail is what the Backend's timeout actually hits.
+
+      - alert: BudgetExhaustion
+        expr: >-
+          rate(hamqadam_budget_exhausted_total[15m])
+            / clamp_min(rate(hamqadam_verifications_total[15m]), 0.001) > 0.05
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Over 5% of verifications are running out of time budget"
+          description: >-
+            These still return a recommendation, but from partial evidence, so
+            more of them land in MANUAL_REVIEW. Scale out or raise
+            server.request_timeout_seconds.
+
+  - name: hamqadam-decision-quality
+    interval: 60s
+    rules:
+      - alert: ManualReviewSurge
+        expr: >-
+          sum(rate(hamqadam_verifications_total{recommendation="MANUAL_REVIEW"}[1h]))
+            / clamp_min(sum(rate(hamqadam_verifications_total[1h])), 0.001) > 0.40
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "Over 40% of verifications are going to manual review"
+          description: >-
+            A quality signal, not an availability one, and the reason the
+            decision-reason counter exists. Break it down by
+            hamqadam_decision_reasons_total to see whether identity confidence,
+            fraud risk or insufficient evidence is driving it. A sudden rise
+            usually means an input source changed - a new app version
+            compressing uploads harder, for instance - rather than a rise in
+            actual fraud.
+
+      - alert: ApprovalRateCollapse
+        expr: >-
+          sum(rate(hamqadam_verifications_total{recommendation="APPROVE"}[1h]))
+            / clamp_min(sum(rate(hamqadam_verifications_total[1h])), 0.001) < 0.20
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: "Approval rate has fallen below 20%"
+          description: >-
+            Legitimate applicants are probably being turned away. Compare the
+            hamqadam_identity_confidence histogram against its usual shape: a
+            leftward shift points at the model or the images, a stable
+            distribution with fewer approvals points at a threshold change.
+
+      - alert: DuplicateSignalSpike
+        expr: >-
+          rate(hamqadam_fraud_signals_total{code="DUPLICATE_FACE_DETECTED"}[30m])
+            > 3 * rate(hamqadam_fraud_signals_total{code="DUPLICATE_FACE_DETECTED"}[24h] offset 1d)
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "Duplicate-face detections are three times their usual rate"
+          description: >-
+            Either a coordinated multi-account attempt, or the duplicate
+            threshold is now too loose for a gallery that has grown. Check
+            hamqadam_gallery_vectors and re-run
+            scripts/calibrate_duplicate_threshold.py against the current size.
+
+      - alert: GalleryNotGrowing
+        expr: >-
+          delta(hamqadam_gallery_vectors[6h]) == 0
+            and rate(hamqadam_verifications_total[6h]) > 0
+        for: 6h
+        labels: {severity: info}
+        annotations:
+          summary: "The duplicate gallery has not changed in six hours"
+          description: >-
+            Verifications are running but nothing is being enrolled, so
+            duplicate detection is comparing against a frozen gallery. Usually
+            means enrol_on_success is off or the enrolment route is unused.

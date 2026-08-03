@@ -1,0 +1,33 @@
+# --------------------------------------------------------------------------- #
+# Hamqadam AI Verification Service - runtime dependencies (CPU baseline).
+# Install with:  pip install -r requirements/base.txt
+# --------------------------------------------------------------------------- #
+
+# --- API layer ------------------------------------------------------------- #
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+pydantic-settings==2.7.0
+orjson==3.10.13
+
+# --- Numerics / vision ----------------------------------------------------- #
+numpy==1.26.4
+# Do NOT move to the 5.x line without reworking the detector fallback chain:
+# OpenCV 5.0 removed cv2.CascadeClassifier and cv2.dnn.readNetFromCaffe, which
+# the Haar and ResNet-SSD adapters depend on. See requirements/local.txt.
+opencv-python-headless==4.10.0.84
+Pillow==11.0.0
+scipy==1.14.1
+
+# --- Inference ------------------------------------------------------------- #
+onnxruntime==1.20.1
+
+# --- Operations ------------------------------------------------------------ #
+structlog==24.4.0
+PyYAML==6.0.2
+tenacity==9.0.0
+anyio==4.7.0
+httpx==0.28.1
+prometheus-client==0.21.1
+python-json-logger==3.2.1

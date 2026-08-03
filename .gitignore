@@ -1,0 +1,48 @@
+# --- Secrets --------------------------------------------------------------- #
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Model weights (fetched via scripts/download_models.py) ----------------- #
+model_store/
+*.onnx
+*.caffemodel
+*.pth
+*.pt
+*.zip
+
+# --- Never let a sample identity document into version control -------------- #
+data/private/
+data/raw/
+*.cnic.*
+scratch/
+
+# --- Python ----------------------------------------------------------------- #
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.python-version
+
+# --- Tooling ---------------------------------------------------------------- #
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.benchmarks/
+mlruns/
+reports/
+
+# --- OS / editor ------------------------------------------------------------ #
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,152 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hamqadam-ai-verification"
+version = "1.0.0"
+description = "Hamqadam AI Identity Verification Service - production-grade face, document and fraud analysis engine."
+readme = "README.md"
+# 3.12 is the reference interpreter (pinned in the Docker image). 3.13 works
+# for the core CPU stack; `enum.StrEnum` puts the hard floor at 3.11.
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Hamqadam AI Engineering" }]
+keywords = ["identity-verification", "kyc", "face-recognition", "ocr", "fraud-detection"]
+
+classifiers = [
+    "Private :: Do Not Upload",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+]
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "python-multipart>=0.0.9",
+    "numpy>=1.26,<3.0",
+    "opencv-python-headless>=4.9.0",
+    "onnxruntime>=1.18.0",
+    "Pillow>=10.3.0",
+    "structlog>=24.1.0",
+    "PyYAML>=6.0.1",
+    "orjson>=3.10.0",
+    "httpx>=0.27.0",
+    "tenacity>=8.3.0",
+    "anyio>=4.4.0",
+    "prometheus-client>=0.20.0",
+]
+
+[project.optional-dependencies]
+gpu = ["onnxruntime-gpu>=1.18.0"]
+recognition = ["insightface>=0.7.3", "scikit-image>=0.23.0"]
+# The default engine only. Runs on the ONNX Runtime already in the base
+# dependencies and bundles its own PP-OCR weights, so this is the whole cost of
+# giving a production image the ability to read a CNIC.
+ocr = ["rapidocr-onnxruntime>=1.3.0"]
+# The two named fallbacks. Kept separate because `paddlepaddle` is a second,
+# large inference runtime and `easyocr` pulls in Torch - neither belongs in an
+# image that is happy with the default.
+ocr-fallbacks = [
+    "rapidocr-onnxruntime>=1.3.0",
+    "paddleocr>=2.7.3",
+    "paddlepaddle>=2.6.1",
+    "easyocr>=1.7.1",
+]
+# The durable gallery for Module 8. Without it the service falls back to an
+# in-process gallery, which is exact and fast but lost on restart and not
+# shared between replicas - so a multi-replica deployment silently detects
+# duplicates only against whichever pod answered.
+vector = ["qdrant-client>=1.9.0"]
+infra = ["redis>=5.0.4", "aio-pika>=9.4.1", "mlflow>=2.13.0"]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.7",
+    "pytest-cov>=5.0.0",
+    "pytest-benchmark>=4.0.0",
+    "ruff>=0.4.8",
+    "mypy>=1.10.0",
+    "types-PyYAML>=6.0.12",
+    "scikit-learn>=1.5.0",
+    "matplotlib>=3.9.0",
+    # So the vector-store contract suite can run against the real Qdrant
+    # query path via its embedded engine, rather than a hand-written fake.
+    "qdrant-client>=1.9.0",
+]
+
+[project.scripts]
+hamqadam-ai = "hamqadam_ai.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+hamqadam_ai = ["py.typed"]
+# Vendored Haar cascades. opencv-python-headless ships an empty cv2/data, so
+# the terminal detector fallback would otherwise vanish in exactly the
+# container deployment it exists to protect. See detectors/cascades/__init__.py.
+"hamqadam_ai.detectors.cascades" = ["*.xml"]
+
+# --------------------------------------------------------------------------- #
+# Tooling
+# --------------------------------------------------------------------------- #
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RET", "ARG", "PTH", "ANN"]
+ignore = ["ANN401", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "ARG"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+files = ["src"]
+
+# Optional third-party packages without type stubs. Listed explicitly rather
+# than suppressed inline, because an inline ignore is environment-dependent:
+# it fires when the package is installed without stubs and is reported as
+# *unused* when the package is absent altogether.
+[[tool.mypy.overrides]]
+module = ["redis.*", "qdrant_client.*", "paddleocr.*", "easyocr.*", "skimage.*"]
+ignore_missing_imports = true
+
+# FastAPI's route decorators are untyped, so under `strict` every handler is
+# reported as "untyped decorator makes function untyped". The handlers
+# themselves are fully annotated; it is the decorator that is not. Scoped to
+# this package rather than relaxed globally.
+[[tool.mypy.overrides]]
+module = ["hamqadam_ai.api.routes", "hamqadam_ai.api.app"]
+disallow_untyped_decorators = false
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "unit: fast, isolated tests with no model weights required",
+    "integration: exercises real model weights or external services",
+    "performance: latency / throughput benchmarks",
+    "accuracy: dataset-driven accuracy evaluation",
+    "gpu: requires a CUDA device",
+]
+
+[tool.coverage.run]
+source = ["src/hamqadam_ai"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

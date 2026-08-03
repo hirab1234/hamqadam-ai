@@ -1,0 +1,8 @@
+# --------------------------------------------------------------------------- #
+# GPU overlay. Install AFTER base.txt/ml.txt; it replaces the CPU onnxruntime.
+#   pip uninstall -y onnxruntime && pip install -r requirements/gpu.txt
+#
+# Requires CUDA 12.x + cuDNN 9.x on the host / in the base image.
+# --------------------------------------------------------------------------- #
+
+onnxruntime-gpu==1.20.1

@@ -1,0 +1,190 @@
+# The full stack: API, worker, vector store, cache, broker, monitoring.
+#
+#   docker compose -f deploy/docker-compose.yml up -d
+#
+# Bring it up the first time with a warm model volume, or the API will spend
+# several minutes downloading weights before /ready turns green. That is
+# expected on a cold start and is why the healthcheck has a 180 s start period.
+
+name: hamqadam-ai
+
+x-ai-environment: &ai-environment
+  HQ_APP__ENVIRONMENT: production
+  # NOT HQ_MODELS__CACHE_DIR: `models` is a real dict section, so that name
+  # does not merely get ignored - it fails validation and the container
+  # never starts.
+  HQ_STORAGE__MODEL_DIR: /models
+  # These names must match the settings tree exactly. An unrecognised
+  # HQ_-prefixed variable is **ignored, not rejected**, so a wrong name is
+  # silent: an earlier draft of this file set HQ_DUPLICATE__STORE__BACKEND,
+  # HQ_CACHE__BACKEND and friends, none of which exist. The stack came up
+  # looking healthy while running an in-memory gallery that lost every enrolled
+  # template on restart and was not shared between replicas.
+  #
+  # Verify a rename against the real tree, not against this file:
+  #   python -c "from hamqadam_ai.core.config import Settings; print(list(Settings.model_fields))"
+  HQ_DUPLICATE__BACKEND: qdrant
+  HQ_DUPLICATE__QDRANT__URL: http://qdrant:6333
+  HQ_EMBEDDING__CACHE__BACKEND: redis
+  # Read directly from the environment by the cache adapter rather than through
+  # the settings tree, which is why it has no HQ_EMBEDDING__ prefix.
+  HQ_REDIS__URL: redis://redis:6379/0
+  HQ_QUEUE__URL: amqp://hamqadam:${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD}@rabbitmq:5672/
+  # Secrets come from the environment, never from a committed file. The `:?`
+  # form fails the compose run with a named variable rather than starting a
+  # service that silently accepts every request.
+  #
+  # One key or several, comma-separated - `HQ_API_KEYS=key-a,key-b`. Several is
+  # what makes rotation possible: both the old and the new key are accepted
+  # during the overlap, so callers can move across without a coordinated cutover.
+  HQ_SECURITY__API_KEYS: ${HQ_API_KEYS:?set HQ_API_KEYS}
+  HQ_SECURITY__REQUIRE_API_KEY: "true"
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: hamqadam/ai-verification:latest
+    restart: unless-stopped
+    environment: *ai-environment
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - models:/models
+    tmpfs:
+      # Temporary image work goes to RAM. An identity document written to a
+      # container's writable layer survives in the layer after the request that
+      # created it, which is exactly what the retention policy forbids.
+      - /tmp/hamqadam:size=512m,mode=1700
+    depends_on:
+      qdrant: {condition: service_started}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 180s
+      retries: 3
+    deploy:
+      resources:
+        limits: {cpus: "4.0", memory: 6G}
+        reservations: {cpus: "2.0", memory: 3G}
+    security_opt:
+      - no-new-privileges:true
+
+  worker:
+    image: hamqadam/ai-verification:latest
+    restart: unless-stopped
+    command: ["python", "-m", "hamqadam_ai.workers"]
+    environment: *ai-environment
+    volumes:
+      - models:/models
+    tmpfs:
+      - /tmp/hamqadam:size=512m,mode=1700
+    depends_on:
+      api: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    deploy:
+      # Scale this, not uvicorn's --workers: each replica is a separate process
+      # with its own model copy either way, and replicas can be scheduled onto
+      # different hosts.
+      replicas: 2
+      resources:
+        limits: {cpus: "4.0", memory: 6G}
+    security_opt:
+      - no-new-privileges:true
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    restart: unless-stopped
+    volumes:
+      - qdrant:/qdrant/storage
+    # No published port. The gallery holds biometric templates; it is reachable
+    # from the compose network and nowhere else.
+    expose:
+      - "6333"
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --maxmemory
+      - 512mb
+      # Eviction rather than refusal. The cache is an optimisation; a full
+      # Redis that starts returning errors would turn a cache into an outage.
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
+  rabbitmq:
+    image: rabbitmq:4.0-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: hamqadam
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq:/var/lib/rabbitmq
+    ports:
+      - "127.0.0.1:15672:15672"
+    expose:
+      - "5672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+    ports:
+      - "127.0.0.1:9090:9090"
+    security_opt:
+      - no-new-privileges:true
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?set GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./monitoring/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  models:
+  qdrant:
+  rabbitmq:
+  prometheus:
+  grafana:

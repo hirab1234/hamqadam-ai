@@ -1,0 +1,3271 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Hamqadam AI Identity Verification",
+    "description": "Face, document and fraud analysis for identity verification. Returns a recommendation; the Backend owns the decision.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/v1/verify": {
+      "post": {
+        "tags": [
+          "verification"
+        ],
+        "summary": "Run a full identity verification",
+        "description": "Analyse one submission and return a recommendation.\n\nEvery image is optional at the transport layer, deliberately. A missing\none is a finding the pipeline reports rather than a request the API\nrefuses - the Backend usually still wants the analysis of whatever did\narrive.",
+        "operationId": "verify_v1_verify_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_verify_v1_verify_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/duplicate/enrol": {
+      "post": {
+        "tags": [
+          "gallery"
+        ],
+        "summary": "Add a face to the duplicate gallery",
+        "description": "Store a face template against a reference.\n\nSeparate from ``/v1/verify`` on purpose. Enrolling as a side effect of\nverifying would put a **rejected** applicant's face in the gallery,\nwhere it would match their next legitimate attempt.",
+        "operationId": "enrol_v1_duplicate_enrol_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_enrol_v1_duplicate_enrol_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Enrol V1 Duplicate Enrol Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/duplicate/{reference}": {
+      "delete": {
+        "tags": [
+          "gallery"
+        ],
+        "summary": "Erase a face from the duplicate gallery",
+        "description": "Erase a stored template.\n\nIdempotent: erasing an absent reference succeeds. A caller retrying an\nerasure request must not be told it failed the second time, because\nthat is how erasure requests get abandoned half-done.",
+        "operationId": "forget_v1_duplicate__reference__delete",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reference",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Reference"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Forget V1 Duplicate  Reference  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Liveness",
+        "description": "Is this process alive?\n\nAnswers yes whenever it can. A liveness probe that fails while models\nare loading gets the pod killed and restarted, forever.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Readiness",
+        "description": "Should traffic be sent here?\n\nA different question from liveness, and answering both with the same\nendpoint is how a warming-up pod ends up in a crash loop.",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Ready Ready Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Prometheus metrics",
+        "description": "Prometheus exposition.\n\nDeliberately unauthenticated and deliberately separate from the API\nkey: a scrape must keep working when key rotation goes wrong, which is\nexactly when the metrics matter most. Expose the port only inside the\ncluster.",
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Metrics Metrics Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AnalysisWarning": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "Stable machine-readable warning identifier."
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Human-readable explanation."
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage",
+            "description": "Pipeline stage that raised the warning."
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail",
+            "description": "Structured, PII-free context."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "AnalysisWarning",
+        "description": "A non-fatal observation attached to a result.\n\nWarnings are how the service reports \"this worked, but you should know\nsomething\" - a face near the pose limit, a fallback detector in use, an\noptional model unavailable. They never change the outcome on their own but\nthey feed the fraud engine and give a human reviewer context."
+      },
+      "AuthenticityFindingModel": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "Stable machine-readable identifier."
+          },
+          "detector": {
+            "type": "string",
+            "title": "Detector",
+            "description": "Which detector produced it."
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "description": "Strength of the evidence."
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Actionable guidance for the user."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "code",
+          "detector",
+          "confidence",
+          "message"
+        ],
+        "title": "AuthenticityFindingModel",
+        "description": "Something found wrong with the image, and what to do about it."
+      },
+      "AuthenticitySignalModel": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Detector identifier."
+          },
+          "triggered": {
+            "type": "boolean",
+            "title": "Triggered",
+            "description": "Whether it found what it looks for."
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "description": "Strength of the evidence for this finding. A low value means weak evidence *for* the finding, not evidence against it."
+          },
+          "measurements": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Measurements",
+            "description": "Raw values behind the verdict. Reported verbatim because these are what an engineer recalibrates against, and because a rejection nobody can explain cannot be appealed."
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note",
+            "description": "Why the detector could not measure."
+          },
+          "measured": {
+            "type": "boolean",
+            "title": "Measured",
+            "description": "Whether the detector produced a usable reading.\n\nExposed rather than left to the caller to derive from ``note``,\nbecause the distinction matters and is easy to miss: a detector that\nstayed silent because it looked and found nothing is telling you\nsomething, and one that could not run at all is not.",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "name",
+          "triggered",
+          "confidence",
+          "measured"
+        ],
+        "title": "AuthenticitySignalModel",
+        "description": "One detector's reading, with the evidence behind it."
+      },
+      "Body_enrol_v1_duplicate_enrol_post": {
+        "properties": {
+          "reference": {
+            "type": "string",
+            "title": "Reference"
+          },
+          "live_selfie": {
+            "type": "string",
+            "format": "binary",
+            "title": "Live Selfie"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reference",
+          "live_selfie"
+        ],
+        "title": "Body_enrol_v1_duplicate_enrol_post"
+      },
+      "Body_verify_v1_verify_post": {
+        "properties": {
+          "verification_id": {
+            "type": "string",
+            "title": "Verification Id"
+          },
+          "user_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Reference"
+          },
+          "enrol_on_success": {
+            "type": "boolean",
+            "title": "Enrol On Success",
+            "default": false
+          },
+          "live_selfie": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Selfie"
+          },
+          "profile_image": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Image"
+          },
+          "cnic_image": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cnic Image"
+          },
+          "secondary_images": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "binary"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Secondary Images"
+          }
+        },
+        "type": "object",
+        "required": [
+          "verification_id"
+        ],
+        "title": "Body_verify_v1_verify_post"
+      },
+      "BoundingBoxModel": {
+        "properties": {
+          "x1": {
+            "type": "number",
+            "title": "X1",
+            "description": "Left edge in source pixels."
+          },
+          "y1": {
+            "type": "number",
+            "title": "Y1",
+            "description": "Top edge in source pixels."
+          },
+          "x2": {
+            "type": "number",
+            "title": "X2",
+            "description": "Right edge in source pixels, exclusive."
+          },
+          "y2": {
+            "type": "number",
+            "title": "Y2",
+            "description": "Bottom edge in source pixels, exclusive."
+          },
+          "width": {
+            "type": "number",
+            "title": "Width",
+            "description": "Box width in pixels."
+          },
+          "height": {
+            "type": "number",
+            "title": "Height",
+            "description": "Box height in pixels."
+          },
+          "area": {
+            "type": "number",
+            "title": "Area",
+            "description": "Box area in square pixels.",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "x1",
+          "y1",
+          "x2",
+          "y2",
+          "width",
+          "height",
+          "area"
+        ],
+        "title": "BoundingBoxModel",
+        "description": "An axis-aligned face box in source-image pixel coordinates."
+      },
+      "CnicOcrResult": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success",
+            "description": "Whether enough of the card could be read to be usable."
+          },
+          "is_cnic": {
+            "type": "boolean",
+            "title": "Is Cnic",
+            "description": "Whether the image appears to be a Pakistani CNIC at all. Distinguishes 'a CNIC we could not read' from 'not a CNIC', which need different messages to the user and carry different fraud weight.",
+            "default": false
+          },
+          "cnic_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cnic Number",
+            "description": "Thirteen digits, formatted XXXXX-XXXXXXX-X."
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "The holder's name."
+          },
+          "father_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Father Name",
+            "description": "Father's or husband's name, as printed."
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender",
+            "description": "M or F."
+          },
+          "date_of_birth": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Of Birth",
+            "description": "As printed."
+          },
+          "issue_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issue Date",
+            "description": "As printed."
+          },
+          "expiry_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expiry Date",
+            "description": "As printed."
+          },
+          "country_of_stay": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Of Stay",
+            "description": "As printed."
+          },
+          "province": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Province",
+            "description": "Region implied by the identity number's leading digit."
+          },
+          "implied_gender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Implied Gender",
+            "description": "Gender implied by the parity of the identity number's final digit - odd is male, even is female. Reported separately from the printed value so the two can be compared."
+          },
+          "is_expired": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Expired",
+            "description": "Whether the expiry date has passed. Null when unreadable."
+          },
+          "is_lifetime": {
+            "type": "boolean",
+            "title": "Is Lifetime",
+            "description": "Whether the card carries lifetime validity instead of an expiry.",
+            "default": false
+          },
+          "ocr_confidence_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Ocr Confidence Score",
+            "description": "Document confidence on the 0-100 scale: a weighted mean over the fields that were read, scaled by completeness and reduced by validation penalties.",
+            "default": 0.0
+          },
+          "field_confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Field Confidence",
+            "description": "Mean confidence across the required fields that were read.",
+            "default": 0.0
+          },
+          "completeness": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Completeness",
+            "description": "Share of the six required fields that were read.",
+            "default": 0.0
+          },
+          "fields_present": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fields Present",
+            "description": "Which required fields were read."
+          },
+          "fields_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fields Missing",
+            "description": "Which required fields could not be read."
+          },
+          "consistent": {
+            "type": "boolean",
+            "title": "Consistent",
+            "description": "Whether the card is internally consistent. False means a cross-field check failed - most usefully, the printed gender disagreeing with the identity number's final digit.",
+            "default": true
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationFindingModel"
+            },
+            "type": "array",
+            "title": "Findings",
+            "description": "Every inconsistency noticed."
+          },
+          "fields": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ExtractedField"
+            },
+            "type": "object",
+            "title": "Fields",
+            "description": "Per-field detail, including confidence and how it was found."
+          },
+          "engine": {
+            "type": "string",
+            "title": "Engine",
+            "description": "Which OCR adapter was used.",
+            "default": ""
+          },
+          "engine_version": {
+            "type": "string",
+            "title": "Engine Version",
+            "description": "Its version.",
+            "default": ""
+          },
+          "used_fallback_engine": {
+            "type": "boolean",
+            "title": "Used Fallback Engine",
+            "description": "Whether the configured primary engine was unavailable.",
+            "default": false
+          },
+          "rotation_applied": {
+            "type": "integer",
+            "title": "Rotation Applied",
+            "description": "Page rotation applied before recognition, degrees.",
+            "default": 0
+          },
+          "preprocessing": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Preprocessing",
+            "description": "What was done to the image."
+          },
+          "lines_detected": {
+            "type": "integer",
+            "title": "Lines Detected",
+            "description": "Recognised text lines.",
+            "default": 0
+          },
+          "orientation_attempts": {
+            "type": "integer",
+            "title": "Orientation Attempts",
+            "description": "How many rotations had to be tried.",
+            "default": 1
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set to CNIC_OCR_FAILED when unusable."
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message",
+            "description": "Human-readable explanation."
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisWarning"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "Non-fatal observations."
+          },
+          "duration_ms": {
+            "type": "number",
+            "title": "Duration Ms",
+            "description": "Time spent reading, in milliseconds.",
+            "default": 0.0
+          },
+          "gender_cross_check_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender Cross Check Passed",
+            "description": "Whether the printed gender agrees with the number's final digit.\n\nNull when the comparison could not be made - either value missing, or\nthe gender having been derived from the number in the first place,\nwhich would make the check circular.",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "success",
+          "gender_cross_check_passed"
+        ],
+        "title": "CnicOcrResult",
+        "description": "MODULE 5 output for one CNIC image."
+      },
+      "CnicPortraitResult": {
+        "properties": {
+          "found": {
+            "type": "boolean",
+            "title": "Found",
+            "description": "Whether a usable portrait was located."
+          },
+          "usable": {
+            "type": "boolean",
+            "title": "Usable",
+            "description": "Whether the portrait was also good enough to embed. A portrait can be found and still be unusable - an illegible print yields a vector that is not wrong so much as meaningless.",
+            "default": false
+          },
+          "portrait": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortraitCandidateModel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The chosen face."
+          },
+          "quality_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Score",
+            "description": "Portrait quality on the CNIC scale, which is far laxer than the live-selfie scale. A sub-300-dpi print behind laminate cannot meet a selfie's bar and is not asked to."
+          },
+          "has_ghost": {
+            "type": "boolean",
+            "title": "Has Ghost",
+            "description": "A second face was found on the card. Expected: modern cards print a faded reproduction of the portrait as a security feature. Not a fraud signal.",
+            "default": false
+          },
+          "foreign_face_count": {
+            "type": "integer",
+            "title": "Foreign Face Count",
+            "description": "Faces present that are not plausibly printed on the card - too large, or outside the photo-box region. A card held in front of a face lands here. Not proof of fraud on its own; a poster on the wall behind would also do it.",
+            "default": 0
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/PortraitCandidateModel"
+            },
+            "type": "array",
+            "title": "Candidates",
+            "description": "Every face considered."
+          },
+          "rectified": {
+            "type": "boolean",
+            "title": "Rectified",
+            "description": "Whether the card was isolated to its own quadrilateral before searching. When true, nothing outside the card was even visible to the detector, which is the strongest form of the containment guarantee.",
+            "default": false
+          },
+          "card_coverage": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Card Coverage",
+            "description": "Share of the frame the card occupied.",
+            "default": 1.0
+          },
+          "searched_width": {
+            "type": "integer",
+            "title": "Searched Width",
+            "description": "Width searched, in pixels.",
+            "default": 0
+          },
+          "searched_height": {
+            "type": "integer",
+            "title": "Searched Height",
+            "description": "Height searched, in pixels.",
+            "default": 0
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Failure code."
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message",
+            "description": "Actionable guidance for the user."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "found"
+        ],
+        "title": "CnicPortraitResult",
+        "description": "Everything the portrait search found on one card image."
+      },
+      "ComparisonResult": {
+        "properties": {
+          "comparison": {
+            "type": "string",
+            "title": "Comparison",
+            "description": "Which pair this relates: profile, secondary or cnic."
+          },
+          "compared": {
+            "type": "boolean",
+            "title": "Compared",
+            "description": "False when one side was missing or unusable. Distinct from a failed match: 'there was no CNIC portrait' and 'the CNIC portrait is a different person' are opposite findings."
+          },
+          "decision": {
+            "$ref": "#/components/schemas/MatchDecision",
+            "description": "STRONG_MATCH, REVIEW, FAILED or NOT_COMPARED."
+          },
+          "score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "description": "Calibrated 0-100 score. Interpolated through the decision boundaries, so 75+ is a strong match and below 50 failed - regardless of which comparison type produced it.",
+            "default": 0.0
+          },
+          "similarity": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": -1.0,
+            "title": "Similarity",
+            "description": "Raw cosine similarity in [-1, 1]. The quantity thresholds are applied to. Note that this is NOT a linear function of `score`.",
+            "default": 0.0
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "description": "How far this comparison can be relied on. The minimum of the two embeddings' confidences - a comparison is only as good as its weaker side.",
+            "default": 0.0
+          },
+          "low_confidence": {
+            "type": "boolean",
+            "title": "Low Confidence",
+            "description": "Whether confidence fell below the configured floor.",
+            "default": false
+          },
+          "target_role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageRole"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which image was compared against the selfie."
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label",
+            "description": "Caller-supplied identifier, echoed back for reassociation."
+          },
+          "strong_match_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strong Match Threshold",
+            "description": "The cosine threshold this comparison was judged against."
+          },
+          "review_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Threshold",
+            "description": "The cosine review boundary for this type."
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "Why the comparison could not be made."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "comparison",
+          "compared",
+          "decision"
+        ],
+        "title": "ComparisonResult",
+        "description": "One comparison of the live selfie against another image."
+      },
+      "DetectedFaceModel": {
+        "properties": {
+          "bounding_box": {
+            "$ref": "#/components/schemas/BoundingBoxModel",
+            "description": "Face box in source pixels."
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "description": "Detector objectness score."
+          },
+          "landmarks": {
+            "items": {
+              "$ref": "#/components/schemas/LandmarkModel"
+            },
+            "type": "array",
+            "title": "Landmarks",
+            "description": "Five facial keypoints. Empty when the active detector does not produce them - the OpenCV DNN and Haar fallbacks do not."
+          },
+          "pose": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PoseEstimate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Head orientation. Null without landmarks."
+          },
+          "occlusion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OcclusionReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Occlusion analysis. Null without landmarks."
+          },
+          "face_visibility_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Face Visibility Score",
+            "description": "Composite visibility on the 0-100 scale."
+          },
+          "visibility_breakdown": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VisibilityBreakdown"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Components of the visibility score."
+          },
+          "face_area_ratio": {
+            "type": "number",
+            "title": "Face Area Ratio",
+            "description": "Face area divided by image area, in [0, 1]."
+          },
+          "truncation_ratio": {
+            "type": "number",
+            "title": "Truncation Ratio",
+            "description": "Fraction of the face box falling outside the frame."
+          },
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary",
+            "description": "True for the face selected as the subject. Exactly one face in a successful result carries this flag.",
+            "default": false
+          },
+          "is_bystander": {
+            "type": "boolean",
+            "title": "Is Bystander",
+            "description": "True for a face small enough relative to the subject to be treated as background rather than a second person.",
+            "default": false
+          },
+          "rejection_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rejection Reasons",
+            "description": "Policy checks this face failed, empty when it passed."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "bounding_box",
+          "confidence",
+          "face_visibility_score",
+          "face_area_ratio",
+          "truncation_ratio"
+        ],
+        "title": "DetectedFaceModel",
+        "description": "A single detected face and everything known about it."
+      },
+      "DuplicateCandidate": {
+        "properties": {
+          "reference": {
+            "type": "string",
+            "title": "Reference",
+            "description": "The Backend's own identifier for the matched record, as it was supplied at enrolment. This service stores it opaquely and cannot resolve it to an account."
+          },
+          "similarity": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": -1.0,
+            "title": "Similarity",
+            "description": "Raw cosine similarity."
+          },
+          "match_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Match Score",
+            "description": "Calibrated 0-100 score, interpolated through this module's own decision boundaries. Not comparable with Module 4's scores: the boundaries differ because the problem does."
+          },
+          "is_duplicate": {
+            "type": "boolean",
+            "title": "Is Duplicate",
+            "description": "Whether this candidate cleared the duplicate threshold."
+          },
+          "needs_review": {
+            "type": "boolean",
+            "title": "Needs Review",
+            "description": "Whether it fell in the band between review and duplicate."
+          },
+          "enrolled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enrolled At",
+            "description": "When the matched template was stored."
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata",
+            "description": "Whatever the Backend attached at enrolment."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "reference",
+          "similarity",
+          "match_score",
+          "is_duplicate",
+          "needs_review"
+        ],
+        "title": "DuplicateCandidate",
+        "description": "One enrolled template that resembled the query."
+      },
+      "DuplicateCheckResult": {
+        "properties": {
+          "duplicate_found": {
+            "type": "boolean",
+            "title": "Duplicate Found",
+            "description": "Whether any enrolled template cleared the duplicate threshold. Evidence for the Backend's rules engine, not a decision."
+          },
+          "needs_review": {
+            "type": "boolean",
+            "title": "Needs Review",
+            "description": "Whether something fell in the review band: close enough to be worth a human look, not close enough to call.",
+            "default": false
+          },
+          "best_similarity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": -1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Similarity",
+            "description": "Highest similarity found, or null on an empty gallery."
+          },
+          "best_match_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Match Score",
+            "description": "The same, calibrated to 0-100."
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/DuplicateCandidate"
+            },
+            "type": "array",
+            "title": "Candidates",
+            "description": "Nearest templates, best first, including sub-threshold ones."
+          },
+          "gallery_size": {
+            "type": "integer",
+            "title": "Gallery Size",
+            "description": "Comparable templates searched. Not a curiosity: a 1:N false-match rate compounds with gallery size, so a similarity cannot be interpreted without knowing how many entries it beat.",
+            "default": 0
+          },
+          "searched": {
+            "type": "boolean",
+            "title": "Searched",
+            "description": "Whether a search actually ran. False means the gallery was empty or unavailable - which is not the same as finding nothing.",
+            "default": false
+          },
+          "self_excluded": {
+            "type": "boolean",
+            "title": "Self Excluded",
+            "description": "Whether the querying user's own template was excluded. Without this a re-verifying user matches themselves at cosine 1.0.",
+            "default": false
+          },
+          "duplicate_threshold": {
+            "type": "number",
+            "title": "Duplicate Threshold",
+            "description": "Cosine at or above which a hit counts as a duplicate."
+          },
+          "review_threshold": {
+            "type": "number",
+            "title": "Review Threshold",
+            "description": "Cosine at or above which a hit is worth a human look."
+          },
+          "thresholds_validated": {
+            "type": "boolean",
+            "title": "Thresholds Validated",
+            "description": "Whether the operating point has been derived against a real gallery. Always false here. A simulation shows the correct threshold swings from 0.26 to 0.96 across plausible values of a parameter this project cannot measure - see the module doc.",
+            "default": false
+          },
+          "recommended_action": {
+            "type": "string",
+            "title": "Recommended Action",
+            "description": "proceed, manual_review or reject. A recommendation only.",
+            "default": "proceed"
+          },
+          "store": {
+            "type": "string",
+            "title": "Store",
+            "description": "Which gallery adapter answered.",
+            "default": ""
+          },
+          "model_version": {
+            "type": "string",
+            "title": "Model Version",
+            "description": "Recogniser version the query and every candidate share. A search never crosses versions - the scores would be meaningless.",
+            "default": ""
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Failure code."
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message",
+            "description": "What went wrong."
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisWarning"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "Non-fatal findings."
+          },
+          "duration_ms": {
+            "type": "number",
+            "title": "Duration Ms",
+            "description": "Wall-clock time.",
+            "default": 0.0
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "duplicate_found",
+          "duplicate_threshold",
+          "review_threshold"
+        ],
+        "title": "DuplicateCheckResult",
+        "description": "MODULE 8 output for one query."
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "INVALID_IMAGE",
+          "FACE_NOT_DETECTED",
+          "MULTIPLE_FACES_DETECTED",
+          "LOW_IMAGE_QUALITY",
+          "CNIC_OCR_FAILED",
+          "FACE_MISMATCH",
+          "DUPLICATE_FACE_DETECTED",
+          "AI_SERVICE_ERROR",
+          "PROCESSING_TIMEOUT",
+          "UNSUPPORTED_IMAGE_FORMAT",
+          "IMAGE_TOO_LARGE",
+          "IMAGE_TOO_SMALL",
+          "IMAGE_DECODE_FAILED",
+          "DECOMPRESSION_BOMB",
+          "VALIDATION_ERROR",
+          "FACE_OCCLUDED",
+          "FACE_POSE_OUT_OF_RANGE",
+          "FACE_TOO_SMALL",
+          "FACE_TRUNCATED",
+          "FACE_NOT_VISIBLE",
+          "CNIC_FACE_NOT_FOUND",
+          "CNIC_NOT_RECOGNISED",
+          "MODEL_NOT_LOADED",
+          "MODEL_LOAD_FAILED",
+          "MODEL_CHECKSUM_MISMATCH",
+          "INFERENCE_FAILED",
+          "VECTOR_DB_ERROR",
+          "CACHE_ERROR",
+          "QUEUE_ERROR",
+          "DEPENDENCY_UNAVAILABLE",
+          "CONFIGURATION_ERROR",
+          "UNAUTHORIZED",
+          "FORBIDDEN",
+          "RATE_LIMITED",
+          "PAYLOAD_TOO_LARGE"
+        ],
+        "title": "ErrorCode",
+        "description": "Stable machine-readable error identifiers.\n\nUse :meth:`definition` to obtain the HTTP status, severity, retryability\nand default human-readable message for a code."
+      },
+      "ExtractedField": {
+        "properties": {
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value",
+            "description": "The parsed value, or null when unreadable."
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "description": "Confidence in this field specifically. Reported per-field rather than only per-document because the fields fail independently - a card can yield a perfect identity number and no gender glyph.",
+            "default": 0.0
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "How the value was located: `label` when anchored on the card's printed label, `pattern` by shape alone, `chronological` by date ordering, `derived` when inferred from another field."
+          },
+          "corrected": {
+            "type": "boolean",
+            "title": "Corrected",
+            "description": "Whether OCR character-confusion correction was needed, which lowers confidence in the reading.",
+            "default": false
+          },
+          "present": {
+            "type": "boolean",
+            "title": "Present",
+            "description": "Whether a value was read.",
+            "default": false
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "ExtractedField",
+        "description": "One field read from the card."
+      },
+      "FaceDetectionResult": {
+        "properties": {
+          "face_detected": {
+            "type": "boolean",
+            "title": "Face Detected",
+            "description": "True when at least one face passed the acceptance policy."
+          },
+          "face_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Face Count",
+            "description": "Number of qualifying faces, after the bystander filter. This is the count the single-person rule is applied to."
+          },
+          "face_visibility_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Face Visibility Score",
+            "description": "Visibility of the primary face, 0-100. Zero when none was found."
+          },
+          "role": {
+            "$ref": "#/components/schemas/ImageRole",
+            "description": "Which image in the request this describes."
+          },
+          "primary_face": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DetectedFaceModel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The face selected as the subject."
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/DetectedFaceModel"
+            },
+            "type": "array",
+            "title": "Faces",
+            "description": "Every face considered, including rejected ones and bystanders."
+          },
+          "raw_detection_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Raw Detection Count",
+            "description": "Candidates the detector emitted before the acceptance policy ran. A large gap from face_count means the policy did the work."
+          },
+          "detector": {
+            "type": "string",
+            "title": "Detector",
+            "description": "Which adapter produced this result."
+          },
+          "detector_version": {
+            "type": "string",
+            "title": "Detector Version",
+            "description": "Pinned version of that adapter's model."
+          },
+          "used_fallback": {
+            "type": "boolean",
+            "title": "Used Fallback",
+            "description": "True when the configured primary detector was unavailable.",
+            "default": false
+          },
+          "image_width": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Width",
+            "description": "Source image width in pixels."
+          },
+          "image_height": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Height",
+            "description": "Source image height in pixels."
+          },
+          "passed": {
+            "type": "boolean",
+            "title": "Passed",
+            "description": "True when this image satisfies the full detection policy and may proceed to the next pipeline stage."
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the image failed. Null when `passed` is true."
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message",
+            "description": "Human-readable explanation of the failure."
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisWarning"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "Non-fatal observations."
+          },
+          "duration_ms": {
+            "type": "number",
+            "title": "Duration Ms",
+            "description": "Time spent detecting in this image, in milliseconds.",
+            "default": 0.0
+          },
+          "multiple_faces": {
+            "type": "boolean",
+            "title": "Multiple Faces",
+            "description": "Whether more than one qualifying face is present.",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "face_detected",
+          "face_count",
+          "face_visibility_score",
+          "role",
+          "raw_detection_count",
+          "detector",
+          "detector_version",
+          "image_width",
+          "image_height",
+          "passed",
+          "multiple_faces"
+        ],
+        "title": "FaceDetectionResult",
+        "description": "MODULE 1 output for one image."
+      },
+      "FaceRegion": {
+        "type": "string",
+        "enum": [
+          "forehead",
+          "left_eye",
+          "right_eye",
+          "nose",
+          "mouth",
+          "chin"
+        ],
+        "title": "FaceRegion",
+        "description": "Anatomical regions used by the occlusion analyser.\n\nThe ordering of :data:`OCCLUSION_REGION_ORDER` is part of the model\ncontract for the optional ONNX occlusion classifier and must not change\nwithout retraining that model."
+      },
+      "FamilyContributionModel": {
+        "properties": {
+          "family": {
+            "type": "string",
+            "title": "Family",
+            "description": "The evidence family."
+          },
+          "contribution": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Contribution",
+            "description": "Its strength after capping."
+          },
+          "raw_contribution": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Raw Contribution",
+            "description": "Before capping."
+          },
+          "capped": {
+            "type": "boolean",
+            "title": "Capped",
+            "description": "Whether a configured ceiling reduced it."
+          },
+          "driver": {
+            "type": "string",
+            "title": "Driver",
+            "description": "Code of the strongest finding in the family."
+          },
+          "signal_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Signal Count",
+            "description": "Findings in this family. More than one means the extras were treated as the same fact seen again, not as additional evidence."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "family",
+          "contribution",
+          "raw_contribution",
+          "capped",
+          "driver",
+          "signal_count"
+        ],
+        "title": "FamilyContributionModel",
+        "description": "What one kind of evidence contributed to the score."
+      },
+      "FraudRiskResult": {
+        "properties": {
+          "fraud_risk_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Fraud Risk Score",
+            "description": "0-100, higher meaning more suspicious. Combined as the strongest finding within each evidence family, then noisy-OR across families - so one fact reported four ways counts once."
+          },
+          "fraud_risk_level": {
+            "$ref": "#/components/schemas/RiskLevel",
+            "description": "LOW, MEDIUM or HIGH."
+          },
+          "top_factors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Top Factors",
+            "description": "Finding codes driving the score, strongest first."
+          },
+          "families": {
+            "items": {
+              "$ref": "#/components/schemas/FamilyContributionModel"
+            },
+            "type": "array",
+            "title": "Families",
+            "description": "Per-family contributions, strongest first."
+          },
+          "signals": {
+            "items": {
+              "$ref": "#/components/schemas/FraudSignalModel"
+            },
+            "type": "array",
+            "title": "Signals",
+            "description": "Every scored finding."
+          },
+          "assessment_confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Assessment Confidence",
+            "description": "Share of the intended checks that actually ran. **Not** a confidence that the score is correct - a measure of how much of the evidence was available to compute it.",
+            "default": 1.0
+          },
+          "unavailable_checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unavailable Checks",
+            "description": "Checks that could not run. These contribute nothing to the score: an absent check is not evidence of innocence, and treating it as such is how a fraud engine gets quietly disabled by an outage."
+          },
+          "unrecognised_findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unrecognised Findings",
+            "description": "Finding codes with no entry in the catalogue. A gap in this engine rather than a property of the request, surfaced rather than swallowed - an unscored finding is a hole no test would otherwise notice."
+          },
+          "floored_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Floored By",
+            "description": "A decisive finding that raised the band regardless of the arithmetic. Null in the shipped configuration; nothing is marked decisive by default."
+          },
+          "weights_validated": {
+            "type": "boolean",
+            "title": "Weights Validated",
+            "description": "Whether the weights were derived from labelled fraud data. Always false. They are policy - a judgement about how much to care about each finding - not calibration.",
+            "default": false
+          },
+          "duration_ms": {
+            "type": "number",
+            "title": "Duration Ms",
+            "description": "Wall-clock time.",
+            "default": 0.0
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "fraud_risk_score",
+          "fraud_risk_level"
+        ],
+        "title": "FraudRiskResult",
+        "description": "MODULE 9 output for one verification request."
+      },
+      "FraudSignalModel": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "Stable identifier from the producing module."
+          },
+          "family": {
+            "type": "string",
+            "title": "Family",
+            "description": "Which kind of evidence this is. Findings sharing a family are treated as one fact seen several ways and do not compound."
+          },
+          "weight": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Weight",
+            "description": "Evidence strength when certain."
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "description": "How sure the producing module was that it fired."
+          },
+          "contribution": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Contribution",
+            "description": "weight x confidence."
+          },
+          "decisive": {
+            "type": "boolean",
+            "title": "Decisive",
+            "description": "Whether this alone raises the band to HIGH.",
+            "default": false
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage",
+            "description": "Which module produced it.",
+            "default": ""
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "What it means, for a reviewer."
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail",
+            "description": "PII-free context."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "code",
+          "family",
+          "weight",
+          "confidence",
+          "contribution",
+          "message"
+        ],
+        "title": "FraudSignalModel",
+        "description": "One piece of evidence, with what it weighed and why."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ImageRole": {
+        "type": "string",
+        "enum": [
+          "live_selfie",
+          "profile_image",
+          "secondary_image",
+          "cnic_image",
+          "cnic_portrait"
+        ],
+        "title": "ImageRole",
+        "description": "Semantic role of an input image inside a verification request.\n\nThe role drives which policy is applied. A CNIC portrait is a low-DPI\nprint and is held to a laxer quality bar than a live selfie, which is the\nbiometric reference for the whole decision."
+      },
+      "LandmarkModel": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "One of: left_eye, right_eye, nose_tip, mouth_left, mouth_right. Left and right are from the viewer's perspective."
+          },
+          "x": {
+            "type": "number",
+            "title": "X",
+            "description": "Horizontal position in source pixels."
+          },
+          "y": {
+            "type": "number",
+            "title": "Y",
+            "description": "Vertical position in source pixels."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "name",
+          "x",
+          "y"
+        ],
+        "title": "LandmarkModel",
+        "description": "One of the five canonical facial keypoints."
+      },
+      "MatchDecision": {
+        "type": "string",
+        "enum": [
+          "STRONG_MATCH",
+          "REVIEW",
+          "FAILED",
+          "NOT_COMPARED"
+        ],
+        "title": "MatchDecision",
+        "description": "Outcome of a single biometric comparison."
+      },
+      "MatchingResult": {
+        "properties": {
+          "face_match_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Face Match Score",
+            "description": "Headline match score. The selfie-to-profile comparison where one exists, otherwise the best available selfie-to-photograph comparison."
+          },
+          "profile_face_match_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Face Match Score",
+            "description": "Live selfie against the main profile image."
+          },
+          "secondary_face_match_scores": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Secondary Face Match Scores",
+            "description": "Live selfie against each secondary image, in submission order."
+          },
+          "cnic_face_match_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cnic Face Match Score",
+            "description": "Live selfie against the portrait on the CNIC."
+          },
+          "identity_confidence_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identity Confidence Score",
+            "description": "Fused confidence that the person in the selfie is who the request claims. Null when too few comparisons succeeded for the number to mean anything - which is reported honestly rather than guessed."
+          },
+          "identity_available": {
+            "type": "boolean",
+            "title": "Identity Available",
+            "description": "Whether enough comparisons succeeded to fuse a confidence."
+          },
+          "cnic_identity_match": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cnic Identity Match",
+            "description": "Whether the CNIC portrait matched outright. Null when no CNIC comparison was possible."
+          },
+          "any_comparison_failed": {
+            "type": "boolean",
+            "title": "Any Comparison Failed",
+            "description": "Whether any comparison actively contradicted the identity claim. Distinct from 'not every comparison matched' - a REVIEW outcome is inconclusive, FAILED is positive evidence of a different person.",
+            "default": false
+          },
+          "capped_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capped By",
+            "description": "Set when a rule limited identity confidence below its computed value; `cnic_failure` when the document comparison failed."
+          },
+          "comparisons": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonResult"
+            },
+            "type": "array",
+            "title": "Comparisons",
+            "description": "Every comparison attempted."
+          },
+          "secondary_worst_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secondary Worst Score",
+            "description": "The weakest individual secondary score. Reported separately from the aggregate because a single mismatching secondary image is a fraud signal that the mean would dilute."
+          },
+          "contributions": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Contributions",
+            "description": "Each comparison type's weighted contribution to the fusion."
+          },
+          "effective_weights": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Effective Weights",
+            "description": "Weights actually applied, after renormalising around unavailable comparisons and down-weighting low-confidence ones."
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons",
+            "description": "Human-readable notes on the fusion."
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisWarning"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "Non-fatal observations."
+          },
+          "model_version": {
+            "type": "string",
+            "title": "Model Version",
+            "description": "Recogniser version every comparison used. Comparisons across versions are refused, not attempted.",
+            "default": ""
+          },
+          "thresholds_validated": {
+            "type": "boolean",
+            "title": "Thresholds Validated",
+            "description": "Whether the operating points were derived from a labelled dataset. False means they are engineering defaults from the literature and have not been validated against this deployment's own traffic.",
+            "default": false
+          },
+          "duration_ms": {
+            "type": "number",
+            "title": "Duration Ms",
+            "description": "Time spent matching, in milliseconds.",
+            "default": 0.0
+          },
+          "comparisons_made": {
+            "type": "integer",
+            "title": "Comparisons Made",
+            "description": "How many comparisons actually ran.",
+            "readOnly": true
+          },
+          "strong_matches": {
+            "type": "integer",
+            "title": "Strong Matches",
+            "description": "How many comparisons passed outright.",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "face_match_score",
+          "identity_available",
+          "comparisons_made",
+          "strong_matches"
+        ],
+        "title": "MatchingResult",
+        "description": "MODULE 4 output for one verification request."
+      },
+      "MetricDetail": {
+        "properties": {
+          "score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "description": "Dimension score on the 0-100 scale."
+          },
+          "measured": {
+            "type": "boolean",
+            "title": "Measured",
+            "description": "False when this dimension could not be computed - no face for sharpness, no landmarks for geometric distortion. An unmeasured dimension is excluded from the composite, not scored zero.",
+            "default": true
+          },
+          "measurements": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Measurements",
+            "description": "Raw values behind the score, in their natural units. These are the numbers thresholds are calibrated against."
+          },
+          "sub_scores": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Sub Scores",
+            "description": "Per-sub-metric normalised scores in [0, 1], before weighting."
+          },
+          "limiting_factor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limiting Factor",
+            "description": "Sub-metric contributing the largest deficit."
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note",
+            "description": "Human-readable explanation, when notable."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "score"
+        ],
+        "title": "MetricDetail",
+        "description": "One quality dimension, with the evidence behind its score."
+      },
+      "ModelVersions": {
+        "properties": {
+          "versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Versions",
+            "description": "Registry key to pinned version string."
+          },
+          "service_version": {
+            "type": "string",
+            "title": "Service Version",
+            "description": "Version of the AI service contract."
+          },
+          "device": {
+            "type": "string",
+            "title": "Device",
+            "description": "Device family the models ran on."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "service_version",
+          "device"
+        ],
+        "title": "ModelVersions",
+        "description": "Version of every model that contributed to a result.\n\nPresent in every response so a decision can be reproduced later against the\nexact artefacts that produced it - a hard requirement for disputing or\nauditing a rejected verification."
+      },
+      "OcclusionReport": {
+        "properties": {
+          "occluded": {
+            "type": "boolean",
+            "title": "Occluded",
+            "description": "True when overall occlusion exceeds the configured threshold."
+          },
+          "overall_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Overall Score",
+            "description": "Weighted occlusion probability across all regions, 0 = clear."
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/RegionOcclusion"
+            },
+            "type": "array",
+            "title": "Regions",
+            "description": "Per-region evidence."
+          },
+          "occluded_regions": {
+            "items": {
+              "$ref": "#/components/schemas/FaceRegion"
+            },
+            "type": "array",
+            "title": "Occluded Regions",
+            "description": "Regions flagged as obstructed."
+          },
+          "symmetry_delta": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Symmetry Delta",
+            "description": "Normalised left/right texture asymmetry. A high value with a low overall score is the signature of a hand or object covering one side of the face.",
+            "default": 0.0
+          },
+          "method": {
+            "type": "string",
+            "title": "Method",
+            "description": "'classifier' when a dedicated ONNX model was used, else 'geometric'.",
+            "default": "geometric"
+          },
+          "visible_fraction": {
+            "type": "number",
+            "title": "Visible Fraction",
+            "description": "Complement of the overall occlusion score, on the 0-100 scale.",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "occluded",
+          "overall_score",
+          "visible_fraction"
+        ],
+        "title": "OcclusionReport",
+        "description": "Aggregate occlusion analysis for one face."
+      },
+      "PortraitCandidateModel": {
+        "properties": {
+          "box": {
+            "$ref": "#/components/schemas/BoundingBoxModel",
+            "description": "Face bounds, in the coordinates of the image searched."
+          },
+          "detector_confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Detector Confidence",
+            "description": "Detector objectness."
+          },
+          "area_ratio": {
+            "type": "number",
+            "title": "Area Ratio",
+            "description": "Face area as a fraction of the card image. Bounded by physical proportion: an ID-1 photo box is a fixed size, so a printed portrait's face occupies a bounded share of the card at any capture resolution."
+          },
+          "band_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Band Score",
+            "description": "How squarely the face sits in a template photo-box band; 1.0 inside, falling to 0.0 outside the tolerance."
+          },
+          "plausibility": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Plausibility",
+            "description": "Combined rank score used to choose between candidates."
+          },
+          "rejections": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rejections",
+            "description": "Why this face cannot be the portrait. Empty means it can."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "box",
+          "detector_confidence",
+          "area_ratio",
+          "band_score",
+          "plausibility"
+        ],
+        "title": "PortraitCandidateModel",
+        "description": "One face considered as the card's printed portrait."
+      },
+      "PoseEstimate": {
+        "properties": {
+          "yaw": {
+            "type": "number",
+            "title": "Yaw",
+            "description": "Left/right rotation in degrees."
+          },
+          "pitch": {
+            "type": "number",
+            "title": "Pitch",
+            "description": "Up/down rotation in degrees."
+          },
+          "roll": {
+            "type": "number",
+            "title": "Roll",
+            "description": "In-plane tilt in degrees."
+          },
+          "frontal": {
+            "type": "boolean",
+            "title": "Frontal",
+            "description": "True when every axis is inside the configured soft limit."
+          },
+          "within_hard_limits": {
+            "type": "boolean",
+            "title": "Within Hard Limits",
+            "description": "True when every axis is inside the hard limit. False means the face is unusable for recognition, not merely imperfect."
+          },
+          "deviation_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Deviation Score",
+            "description": "Normalised distance from frontal, 0 = perfectly frontal, 1 = at or beyond the hard limit on some axis."
+          },
+          "method": {
+            "type": "string",
+            "title": "Method",
+            "description": "How the pose was derived: 'pnp' or 'landmark_geometry'."
+          },
+          "reprojection_error": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reprojection Error",
+            "description": "Mean landmark reprojection error in pixels for the PnP solve. A large value means the solve did not fit and the estimate is less trustworthy."
+          },
+          "dominant_axis": {
+            "type": "string",
+            "title": "Dominant Axis",
+            "description": "The axis furthest from frontal, for user-facing guidance.",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "yaw",
+          "pitch",
+          "roll",
+          "frontal",
+          "within_hard_limits",
+          "deviation_score",
+          "method",
+          "dominant_axis"
+        ],
+        "title": "PoseEstimate",
+        "description": "Head orientation in degrees, and whether it is within tolerance.\n\nAngles follow the aviation convention applied to a head facing the camera:\n\n* ``yaw`` - rotation about the vertical axis. Positive means the subject\n  turned towards the viewer's right.\n* ``pitch`` - rotation about the horizontal axis. Positive means the chin\n  is raised.\n* ``roll`` - in-plane tilt. Positive means the head is tilted so the\n  viewer-right eye moves down."
+      },
+      "ProcessingTime": {
+        "properties": {
+          "total": {
+            "type": "number",
+            "title": "Total",
+            "description": "End-to-end duration in milliseconds."
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit",
+            "description": "Unit of every duration here.",
+            "default": "ms"
+          },
+          "stages": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Stages",
+            "description": "Per-stage duration, call count and average. Stage totals may sum to more than `total` when stages ran concurrently."
+          },
+          "overhead": {
+            "type": "number",
+            "title": "Overhead",
+            "description": "Time not attributed to any measured stage.",
+            "default": 0.0
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "total"
+        ],
+        "title": "ProcessingTime",
+        "description": "Wall-clock breakdown of a request, in milliseconds."
+      },
+      "ProfileAnalysisResult": {
+        "properties": {
+          "usable_as_profile": {
+            "type": "boolean",
+            "title": "Usable As Profile",
+            "description": "Whether this photograph can serve as a profile picture: a genuine-looking capture, of one person, of adequate quality. A recommendation to the Backend's rules engine, not a decision."
+          },
+          "authenticity_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Authenticity Score",
+            "description": "0-100. An upper bound on suspicion, NOT a measure of trust. 100 means four specific tests found nothing - a cropped screenshot or a distant screen capture also scores 100."
+          },
+          "is_probably_genuine_capture": {
+            "type": "boolean",
+            "title": "Is Probably Genuine Capture",
+            "description": "Whether the authenticity score cleared its threshold. Same caveat: absence of evidence, not evidence of absence."
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/AuthenticityFindingModel"
+            },
+            "type": "array",
+            "title": "Findings",
+            "description": "Detectors that triggered, strongest evidence first."
+          },
+          "signals": {
+            "items": {
+              "$ref": "#/components/schemas/AuthenticitySignalModel"
+            },
+            "type": "array",
+            "title": "Signals",
+            "description": "Every detector's reading, including the silent ones."
+          },
+          "face_detected": {
+            "type": "boolean",
+            "title": "Face Detected",
+            "description": "Whether a qualifying face was found.",
+            "default": false
+          },
+          "face_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Face Count",
+            "description": "How many qualifying faces were found.",
+            "default": 0
+          },
+          "is_group_photo": {
+            "type": "boolean",
+            "title": "Is Group Photo",
+            "description": "More than one qualifying face. Not dishonest - but ambiguous about which person the account belongs to.",
+            "default": false
+          },
+          "face_visibility_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Face Visibility Score",
+            "description": "Visibility of the primary face, 0-100.",
+            "default": 0.0
+          },
+          "image_quality_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Image Quality Score",
+            "description": "Module 2 composite, on this role's scale.",
+            "default": 0.0
+          },
+          "quality_usable": {
+            "type": "boolean",
+            "title": "Quality Usable",
+            "description": "Whether quality cleared this role's bar.",
+            "default": false
+          },
+          "role": {
+            "$ref": "#/components/schemas/ImageRole",
+            "description": "Which image in the request this is."
+          },
+          "image_width": {
+            "type": "integer",
+            "title": "Image Width",
+            "description": "Source width in pixels.",
+            "default": 0
+          },
+          "image_height": {
+            "type": "integer",
+            "title": "Image Height",
+            "description": "Source height in pixels.",
+            "default": 0
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Failure code."
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message",
+            "description": "Actionable guidance for the user."
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisWarning"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "Non-fatal findings."
+          },
+          "duration_ms": {
+            "type": "number",
+            "title": "Duration Ms",
+            "description": "Wall-clock time.",
+            "default": 0.0
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "usable_as_profile",
+          "authenticity_score",
+          "is_probably_genuine_capture",
+          "role"
+        ],
+        "title": "ProfileAnalysisResult",
+        "description": "MODULE 7 output for one user-supplied photograph."
+      },
+      "QualityResult": {
+        "properties": {
+          "image_quality_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Image Quality Score",
+            "description": "Composite quality on the 0-100 scale."
+          },
+          "blur_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Blur Score",
+            "description": "Whole-image focus, 0-100. Higher is sharper."
+          },
+          "brightness_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Brightness Score",
+            "description": "Exposure quality, 0-100. Penalises both extremes."
+          },
+          "noise_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Noise Score",
+            "description": "Noise quality, 0-100. Higher means cleaner."
+          },
+          "contrast_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Contrast Score",
+            "description": "Tonal separation, 0-100."
+          },
+          "resolution_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Resolution Score",
+            "description": "Genuine as-captured resolution of the face, 0-100."
+          },
+          "sharpness_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Sharpness Score",
+            "description": "Face-region focus, 0-100. Distinct from whole-image blur."
+          },
+          "distortion_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Distortion Score",
+            "description": "Freedom from posterisation, fringing and stretching, 0-100."
+          },
+          "pixelation_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Pixelation Score",
+            "description": "Freedom from block artefacts and upscaling, 0-100."
+          },
+          "role": {
+            "$ref": "#/components/schemas/ImageRole",
+            "description": "Which image in the request this describes."
+          },
+          "usable": {
+            "type": "boolean",
+            "title": "Usable",
+            "description": "True when the image clears its role threshold and every critical floor, and may proceed to the next pipeline stage."
+          },
+          "min_required": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Min Required",
+            "description": "Role-specific acceptance threshold this was judged against."
+          },
+          "limiting_factor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limiting Factor",
+            "description": "The dimension contributing the largest weighted deficit."
+          },
+          "critical_failures": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Critical Failures",
+            "description": "Dimensions that fell at or below the critical floor. Any entry here makes the image unusable regardless of the composite score."
+          },
+          "unmeasured": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unmeasured",
+            "description": "Dimensions that could not be computed for this image."
+          },
+          "metrics": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MetricDetail"
+            },
+            "type": "object",
+            "title": "Metrics",
+            "description": "Every dimension with its raw measurements and sub-scores."
+          },
+          "effective_weights": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Effective Weights",
+            "description": "Weights actually applied, after renormalising around any unmeasured dimension."
+          },
+          "arithmetic_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Arithmetic Score",
+            "description": "The plain weighted mean, for comparison. The composite uses a power mean with exponent < 1, which penalises a single catastrophic dimension instead of averaging it away; publishing both makes that adjustment auditable.",
+            "default": 0.0
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set to LOW_IMAGE_QUALITY when unusable."
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message",
+            "description": "Human-readable explanation of the rejection."
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisWarning"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "Non-fatal observations."
+          },
+          "image_width": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Width",
+            "description": "Source image width in pixels."
+          },
+          "image_height": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Height",
+            "description": "Source image height in pixels."
+          },
+          "face_analysed": {
+            "type": "boolean",
+            "title": "Face Analysed",
+            "description": "Whether a face region was available. Without one, exposure, contrast and noise fall back to whole-image measurement and sharpness is not computed at all."
+          },
+          "duration_ms": {
+            "type": "number",
+            "title": "Duration Ms",
+            "description": "Time spent assessing this image, in milliseconds.",
+            "default": 0.0
+          },
+          "degraded_dimensions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Degraded Dimensions",
+            "description": "Dimensions scoring below 50, for a quick triage view.",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "image_quality_score",
+          "blur_score",
+          "brightness_score",
+          "noise_score",
+          "contrast_score",
+          "resolution_score",
+          "sharpness_score",
+          "distortion_score",
+          "pixelation_score",
+          "role",
+          "usable",
+          "min_required",
+          "image_width",
+          "image_height",
+          "face_analysed",
+          "degraded_dimensions"
+        ],
+        "title": "QualityResult",
+        "description": "MODULE 2 output for one image."
+      },
+      "Recommendation": {
+        "type": "string",
+        "enum": [
+          "APPROVE",
+          "REJECT",
+          "MANUAL_REVIEW"
+        ],
+        "title": "Recommendation",
+        "description": "Final AI recommendation returned to the Backend rules engine."
+      },
+      "RegionOcclusion": {
+        "properties": {
+          "region": {
+            "$ref": "#/components/schemas/FaceRegion",
+            "description": "Which part of the face this describes."
+          },
+          "occlusion_probability": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Occlusion Probability",
+            "description": "Fused probability that this region is obstructed."
+          },
+          "occluded": {
+            "type": "boolean",
+            "title": "Occluded",
+            "description": "Whether the probability exceeds the configured threshold."
+          },
+          "flat_fraction": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Flat Fraction",
+            "description": "Share of the region whose local gradient falls below half the face-wide median. The dominant occlusion signal: on a real portrait a bare eye measures around 0.06 and a covered one 1.00, and unlike chrominance it detects a skin-coloured occluder.",
+            "default": 0.0
+          },
+          "texture_energy": {
+            "type": "number",
+            "title": "Texture Energy",
+            "description": "Mean gradient energy of the region relative to the face median. Reported for diagnosis only. It is deliberately not the driver of the occlusion verdict, because a hard-edged occluder raises it through its own boundary gradients."
+          },
+          "skin_coverage": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Skin Coverage",
+            "description": "Fraction of the region classified as skin in YCrCb space."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "region",
+          "occlusion_probability",
+          "occluded",
+          "texture_energy",
+          "skin_coverage"
+        ],
+        "title": "RegionOcclusion",
+        "description": "Occlusion evidence for one anatomical region."
+      },
+      "RiskLevel": {
+        "type": "string",
+        "enum": [
+          "LOW",
+          "MEDIUM",
+          "HIGH"
+        ],
+        "title": "RiskLevel",
+        "description": "Coarse fraud-risk banding."
+      },
+      "StageStatus": {
+        "properties": {
+          "stage": {
+            "type": "string",
+            "title": "Stage",
+            "description": "Stage name."
+          },
+          "ran": {
+            "type": "boolean",
+            "title": "Ran",
+            "description": "Whether it executed at all."
+          },
+          "succeeded": {
+            "type": "boolean",
+            "title": "Succeeded",
+            "description": "Whether it produced a usable result. A stage can run and fail - 'no face detected' is a completed stage with a negative finding.",
+            "default": false
+          },
+          "duration_ms": {
+            "type": "number",
+            "title": "Duration Ms",
+            "description": "Wall-clock time.",
+            "default": 0.0
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Why it could not run or could not finish."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "stage",
+          "ran"
+        ],
+        "title": "StageStatus",
+        "description": "Whether one pipeline stage ran, and what it cost."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "ValidationFindingModel": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "Stable machine-readable identifier."
+          },
+          "severity": {
+            "type": "string",
+            "title": "Severity",
+            "description": "error, warning or info."
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Human-readable explanation."
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fields",
+            "description": "Which fields the finding concerns."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "code",
+          "severity",
+          "message"
+        ],
+        "title": "ValidationFindingModel",
+        "description": "One inconsistency the validator noticed."
+      },
+      "VerificationResult": {
+        "properties": {
+          "verification_id": {
+            "type": "string",
+            "title": "Verification Id",
+            "description": "Echoed from the request."
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Completed At",
+            "description": "When the analysis finished, UTC."
+          },
+          "recommendation": {
+            "$ref": "#/components/schemas/Recommendation",
+            "description": "APPROVE, REJECT or MANUAL_REVIEW. **Advice, not an outcome** - the Backend's rules engine decides, using context this service does not have."
+          },
+          "recommendation_reasons": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Recommendation Reasons",
+            "description": "Every condition the recommendation was based on."
+          },
+          "automated": {
+            "type": "boolean",
+            "title": "Automated",
+            "description": "Whether a rule fired, or the request simply fell through to the default. A reviewer seeing MANUAL_REVIEW needs to know which.",
+            "default": false
+          },
+          "identity_confidence_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identity Confidence Score",
+            "description": "Module 4's fused confidence that every image is the same person. ``null`` when no comparison was possible - which is different from zero."
+          },
+          "fraud_risk_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Fraud Risk Score",
+            "description": "Module 9's aggregated risk, 0-100.",
+            "default": 0.0
+          },
+          "fraud_risk_level": {
+            "$ref": "#/components/schemas/RiskLevel",
+            "description": "LOW, MEDIUM or HIGH.",
+            "default": "LOW"
+          },
+          "selfie_detection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FaceDetectionResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selfie_quality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QualityResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile_analysis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProfileAnalysisResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "secondary_analyses": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileAnalysisResult"
+            },
+            "type": "array",
+            "title": "Secondary Analyses"
+          },
+          "cnic_ocr": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CnicOcrResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cnic_portrait": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CnicPortraitResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What Module 6 found on the card. The selfie-to-portrait *comparison* is not here - it lives in ``matching.comparisons`` with every other comparison, because reporting it twice would invite two answers to one question."
+          },
+          "matching": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MatchingResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "duplicate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DuplicateCheckResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fraud": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FraudRiskResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/StageStatus"
+            },
+            "type": "array",
+            "title": "Stages",
+            "description": "What ran, what did not, and why."
+          },
+          "complete": {
+            "type": "boolean",
+            "title": "Complete",
+            "description": "Whether every intended stage ran. A partial verification still produces a recommendation - it produces a more cautious one.",
+            "default": true
+          },
+          "assessment_confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Assessment Confidence",
+            "description": "Share of the intended evidence that was available. Not a confidence that the recommendation is right.",
+            "default": 1.0
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisWarning"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "Non-fatal findings from every stage."
+          },
+          "model_versions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelVersions"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Every model that contributed, so a disputed verification can be reproduced months later against the exact artefacts."
+          },
+          "processing_time": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingTime"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Wall-clock breakdown."
+          },
+          "thresholds_validated": {
+            "type": "boolean",
+            "title": "Thresholds Validated",
+            "description": "Whether the operating points behind this recommendation were derived from labelled data. Always false: Modules 4, 8 and 9 all report their thresholds as unvalidated, because the datasets that would calibrate them are not in this project.",
+            "default": false
+          },
+          "requires_human_review": {
+            "type": "boolean",
+            "title": "Requires Human Review",
+            "description": "Whether a person needs to look at this.\n\nExposed rather than left to the caller to derive, because\n``recommendation != APPROVE`` is not the same thing: a REJECT that was\nautomated needs no reviewer, and a MANUAL_REVIEW always does.",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "verification_id",
+          "completed_at",
+          "recommendation",
+          "requires_human_review"
+        ],
+        "title": "VerificationResult",
+        "description": "MODULE 10 output - the complete verification.\n\nThe four headline fields the Backend's rules engine reads are\n``recommendation``, ``identity_confidence_score``, ``fraud_risk_score`` and\n``fraud_risk_level``. Everything else exists so a decision can be explained\nto the person it was made about."
+      },
+      "VisibilityBreakdown": {
+        "properties": {
+          "detector_confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Detector Confidence",
+            "description": "Raw detector objectness for this face."
+          },
+          "occlusion": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Occlusion",
+            "description": "1 - overall occlusion score."
+          },
+          "pose": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Pose",
+            "description": "1 - pose deviation score."
+          },
+          "face_size": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Face Size",
+            "description": "How well the face fills the frame, relative to the target ratio."
+          },
+          "framing": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Framing",
+            "description": "1 - truncation ratio; penalises a face cut off by the frame edge."
+          },
+          "weights": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Weights",
+            "description": "Weight applied to each component."
+          },
+          "limiting_factor": {
+            "type": "string",
+            "title": "Limiting Factor",
+            "description": "Component contributing the largest deficit to the composite."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "detector_confidence",
+          "occlusion",
+          "pose",
+          "face_size",
+          "framing",
+          "limiting_factor"
+        ],
+        "title": "VisibilityBreakdown",
+        "description": "Components of the composite face-visibility score.\n\nExposed in full because ``face_visibility_score`` alone cannot tell a user\nwhether to move closer, remove their sunglasses or face the camera."
+      }
+    },
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "description": "Per-caller API key issued by the Backend. Compared in constant time; the key itself is never written to a log.",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+# Grafana provisioning: point at Prometheus on startup.
+#
+# Provisioned rather than clicked through the UI, so a rebuilt Grafana comes
+# back configured instead of empty.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      # Must match prometheus.yml's scrape_interval, or Grafana's automatic
+      # rate() windows are narrower than the data and every panel shows gaps.
+      timeInterval: 15s
+    editable: false

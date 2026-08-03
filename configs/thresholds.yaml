@@ -1,0 +1,1132 @@
+# =========================================================================== #
+# Threshold & policy configuration.
+#
+# EVERY number that influences an accept/reject outcome lives in this file.
+# No threshold is hard-coded in Python. Operations can retune the system by
+# editing this file (or setting HQ_* env overrides) and restarting - no code
+# change, no redeploy of the image.
+#
+# Values are calibrated against the validation protocol in
+# docs/evaluation/threshold_calibration.md and MUST be re-derived whenever a
+# model version changes.
+# =========================================================================== #
+
+# --------------------------------------------------------------------------- #
+# MODULE 1 - FACE DETECTION
+# --------------------------------------------------------------------------- #
+detection:
+  # Which detector to try first. The chain falls through on load failure or
+  # on a runtime error, in the order listed.
+  primary: scrfd
+  fallback_chain: [scrfd, yolo, opencv_dnn, haar]
+  # Abort the chain after this many detectors have failed to load.
+  max_fallback_depth: 4
+
+  # ---- Raw detector thresholds ---- #
+  # Objectness score below which a candidate box is discarded outright.
+  # 0.50 keeps recall high on low-light selfies; the policy layer below does
+  # the strict filtering, so a permissive detector threshold is deliberate.
+  score_threshold: 0.50
+  # IoU used by non-maximum suppression across candidate boxes.
+  nms_iou_threshold: 0.40
+  # Never consider more than this many candidates (DoS guard on adversarial
+  # images that trigger thousands of weak activations).
+  max_candidates: 200
+
+  # ---- Input handling ---- #
+  # Longest side the image is resized to before detection. Larger = better
+  # recall on small faces, quadratically more compute.
+  detection_input_size: [640, 640]
+  # If the longest side of the source exceeds this, downscale first. Phone
+  # photos are frequently 4000 px and cost 4x for zero accuracy gain.
+  max_source_long_side: 1920
+  # Images smaller than this on the short side are rejected as unusable.
+  min_source_short_side: 160
+
+  # ---- Face acceptance policy ---- #
+  policy:
+    # A face must clear this confidence to count as a detected face.
+    min_confidence: 0.60
+    # face_area / image_area. Guards against a face 30 px wide in a
+    # 4000 px photo, which yields a useless embedding.
+    min_face_area_ratio: 0.008
+    # Upper guard: a face filling the whole frame is usually a photo-of-a-
+    # photo or an extreme crop that clips the head.
+    max_face_area_ratio: 0.95
+    # Absolute pixel floor on the shorter side of the face box. ArcFace is
+    # trained at 112 px; below ~64 px source pixels quality collapses.
+    min_face_pixels: 64
+    # How many faces are permitted before MULTIPLE_FACES_DETECTED fires.
+    max_faces_allowed: 1
+    # Faces smaller than this fraction of the largest face are treated as
+    # background bystanders and ignored rather than triggering a rejection.
+    # 0.35 -> a face under 35% the size of the subject does not count.
+    bystander_area_ratio: 0.35
+    # When several faces survive the bystander filter, either reject or take
+    # the dominant (largest, most central, highest confidence) one.
+    on_multiple_faces: reject       # reject | select_primary
+    # Fraction of the box that may lie outside the frame before the face is
+    # considered truncated.
+    max_truncation_ratio: 0.10
+
+  # ---- Head pose limits (degrees, absolute value) ---- #
+  # Derived from the ISO/IEC 19794-5 full-frontal token image requirements,
+  # relaxed for a consumer selfie flow.
+  pose:
+    max_yaw: 30.0
+    max_pitch: 25.0
+    max_roll: 25.0
+    # Pose beyond these is not merely low quality, it is unusable.
+    hard_max_yaw: 50.0
+    hard_max_pitch: 45.0
+    hard_max_roll: 45.0
+    # Weight of pose deviation inside the visibility score.
+    visibility_weight: 0.25
+
+  # ---- Occlusion analysis ---- #
+  occlusion:
+    # Per-region occlusion probability above which the region is flagged.
+    region_threshold: 0.55
+    # Overall occlusion above which the face is considered obstructed.
+    overall_threshold: 0.45
+    # Regions that matter most for recognition get a heavier vote.
+    region_weights:
+      forehead: 0.10
+      left_eye: 0.22
+      right_eye: 0.22
+      nose: 0.18
+      mouth: 0.16
+      chin: 0.12
+    # Texture-energy floor. A region whose normalised gradient energy falls
+    # below this relative to the face median is evidence of a flat covering
+    # (mask, hand, sunglasses).
+    texture_energy_floor: 0.35
+    # Skin-tone coverage floor per region (YCrCb ellipse model).
+    skin_coverage_floor: 0.30
+    # Left/right texture asymmetry above which partial occlusion is inferred.
+    symmetry_delta_threshold: 0.35
+    # Weight of occlusion inside the visibility score.
+    visibility_weight: 0.35
+
+  # ---- Composite visibility score weights (must sum to 1.0) ---- #
+  visibility:
+    weights:
+      detector_confidence: 0.20
+      occlusion: 0.30
+      pose: 0.22
+      face_size: 0.16
+      framing: 0.12
+    # Below this the face is reported as insufficiently visible.
+    min_acceptable: 0.55
+
+# --------------------------------------------------------------------------- #
+# MODULE 2 - IMAGE / FACE QUALITY
+#
+# SCORE MAPPINGS
+# --------------
+# Every raw measurement is mapped into [0, 1] through explicit anchor points
+# rather than a bare pass/fail threshold, because a threshold throws away the
+# information the fraud engine and a human reviewer need most - *how far* from
+# acceptable an image is.
+#
+#   ramp mappings:  {floor, good}
+#       `floor` -> score 0, `good` -> score 1, smoothstep in between.
+#       When floor > good the metric is lower-is-better (noise, blockiness).
+#   band mappings:  {min_acceptable, ideal_low, ideal_high, max_acceptable}
+#       Zero outside [min_acceptable, max_acceptable], one across the ideal
+#       plateau, smoothstep on the two shoulders. Used where both extremes are
+#       bad - brightness being the obvious case.
+#
+# SCALE NORMALISATION
+# -------------------
+# Focus and sharpness metrics are computed on the face crop resampled to
+# `canonical_face_size`. A raw Laplacian variance is meaningless across
+# resolutions: the same face at 4000 px and 300 px produces values an order of
+# magnitude apart. Normalising the sampling scale is what makes one set of
+# anchors valid for every input size.
+#
+# The anchors below were measured against real photographs and their controlled
+# degradations - see docs/modules/02_face_quality.md for the measured table.
+# --------------------------------------------------------------------------- #
+quality:
+  # Face crop is resampled to this square size before focus/sharpness metrics.
+  # 160 px keeps the eye region around 40 px wide, which is where the
+  # diagnostic high-frequency detail lives, without over-smoothing.
+  canonical_face_size: 160
+
+  # Margin added around the detector box before cropping the face for
+  # analysis, as a fraction of box size.
+  face_crop_margin: 0.15
+
+  # Global metrics are computed on the image downscaled to this longest side.
+  # Blockiness and spectral analysis on a 12 MP image cost ~400 ms for no
+  # additional information.
+  global_analysis_long_side: 1024
+
+  # ---- Composite aggregation ---- #
+  aggregation:
+    # Weighted power mean exponent. p = 1 is the arithmetic mean; p < 1
+    # penalises low components progressively harder. 0.5 was chosen so that a
+    # single catastrophic component visibly drags the composite down instead of
+    # being averaged away by five good ones.
+    power: 0.5
+    weights:
+      blur: 0.22
+      sharpness: 0.16
+      brightness: 0.12
+      contrast: 0.10
+      noise: 0.11
+      resolution: 0.16
+      # Raised from 0.05 after measurement: heavy block artefacts destroy the
+      # fine facial texture that recognition depends on, and a 5% share moved
+      # a quality-8 JPEG by only 8 points off pristine.
+      pixelation: 0.09
+      distortion: 0.04
+    # Any single component at or below this makes the image unusable outright,
+    # whatever the composite says. A perfectly exposed but completely
+    # out-of-focus photograph is not a 70.
+    critical_floor: 0.12
+    # Components whose critical floor is enforced. Exposure and contrast are
+    # excluded: they are recoverable and a dim-but-sharp photo is still usable.
+    critical_components: [blur, sharpness, resolution]
+
+  # ---- Per-role acceptance ---- #
+  # A CNIC portrait is a sub-300-dpi print photographed through a laminate; it
+  # cannot and need not meet the bar a live selfie does.
+  #
+  # The two CNIC roles also override `critical_components`. The global list
+  # enforces a floor on blur and sharpness because, for a live capture, a
+  # near-zero focus score means camera shake and the image is worthless
+  # whatever else it scores. A printed portrait is a different object: low
+  # high-frequency content is the medium, not a fault.
+  #
+  # Measured on a print-degraded reference face, downsampling harder and
+  # harder before reprinting:
+  #
+  #   downsample   quality  sharpness   cosine(same)  cosine(impostor)
+  #   1x              89.3      67.93          0.976             0.004
+  #   2x              78.9      22.17          0.945            -0.018
+  #   3x              70.0       2.08          0.881            -0.010
+  #   4x              67.2       0.14          0.710            -0.009
+  #   6x              66.9       0.00          0.551            -0.028
+  #
+  # Sharpness reaches zero while recognition still separates the same person
+  # at 0.551 from an impostor at -0.028, against a CNIC strong-match threshold
+  # of 0.42. Enforcing the focus floor here would refuse to compare a decisive
+  # match because the print looked like a print. `resolution` stays enforced:
+  # a portrait genuinely too small to resolve is a real failure, and the
+  # composite floor of 25.0 still catches a card photographed out of focus.
+  roles:
+    live_selfie:      { min_overall: 55.0 }
+    profile_image:    { min_overall: 50.0 }
+    secondary_image:  { min_overall: 45.0 }
+    cnic_image:
+      min_overall: 35.0
+      critical_components: [resolution]
+    cnic_portrait:
+      min_overall: 25.0
+      critical_components: [resolution]
+  default_min_overall: 50.0
+
+  # ---- Focus / blur (whole image) ---- #
+  #
+  # All three anchors are LOG SCALE. Measured on the reference portrait the
+  # Laplacian variance runs 37 (21x21 Gaussian, unusable) to 10014 (pristine),
+  # a factor of 270. A linear ramp across that range collapses every
+  # degradation below "slightly soft" to exactly zero and cannot rank them.
+  #
+  #   measured         pristine   gauss3   gauss9   gauss21
+  #   laplacian          10014     2150      275        37
+  #   tenengrad          17119    10804     5023      1947
+  #   hf_ratio          0.0189   0.0089   0.0012   0.00002
+  blur:
+    # Variance of the Laplacian. The most sensitive of the three, but it
+    # scales with local contrast as well as with focus.
+    laplacian_variance: { floor: 40.0, good: 4000.0, log_scale: true }
+    # Tenengrad (mean squared Sobel magnitude). Less sensitive to impulse
+    # noise, because a first derivative amplifies edges rather than isolated
+    # hot pixels the way a second derivative does. Also less discriminative,
+    # hence the lower weight.
+    tenengrad: { floor: 800.0, good: 16000.0, log_scale: true }
+    # Fraction of spectral energy above 0.25 x Nyquist. A ratio, so nearly
+    # content-independent. This is the term that separates "genuinely smooth
+    # subject" from "out of focus", which neither derivative measure can do.
+    high_frequency_ratio: { floor: 0.0002, good: 0.020, log_scale: true }
+    weights:
+      laplacian: 0.35
+      tenengrad: 0.30
+      spectral: 0.35
+
+  # ---- Face-region sharpness ---- #
+  # Distinct from `blur`: a photograph can have a pin-sharp background and a
+  # motion-blurred face. Global blur reports fine; this does not.
+  sharpness:
+    # Measured on the eye band of the canonical crop - the highest-frequency,
+    # most focus-diagnostic part of a face. Log scale, for the same reason as
+    # the blur anchors.
+    #   measured   pristine 19058 | gauss3 9445 | gauss9 2536 | gauss21 396
+    eye_region_laplacian: { floor: 500.0, good: 20000.0, log_scale: true }
+    # Ratio of face-region focus to background focus, both measured on the same
+    # image at the same sampling density. Well below 1.0 means the subject is
+    # blurred while the scene is not - subject motion rather than a focus
+    # error. This is a specific detector for one failure mode rather than a
+    # general quality measure: it reads 1.0 on almost every genuine capture, so
+    # it carries a small weight and only earns its place when it fires.
+    face_vs_scene_ratio: { floor: 0.25, good: 0.90 }
+    weights:
+      eye_region: 0.80
+      relative: 0.20
+
+  # ---- Exposure ---- #
+  brightness:
+    # Mean luminance of the face region, 0-255.
+    mean_luma:
+      min_acceptable: 30.0
+      ideal_low: 95.0
+      ideal_high: 180.0
+      max_acceptable: 230.0
+    # Fraction of pixels crushed to black / blown to white. Clipped pixels
+    # carry no recoverable detail, so a small amount is disqualifying even when
+    # the mean looks healthy.
+    shadow_clipping: { floor: 0.18, good: 0.01 }
+    highlight_clipping: { floor: 0.12, good: 0.005 }
+    # Mean luminance GATES the clipping terms rather than averaging with them.
+    # Under a plain weighted mean a silhouetted face scored 45: its mean term
+    # was zero, both clipping terms were perfect, and two thirds of the weight
+    # outvoted the one measurement that mattered. Whether a silhouette's
+    # shadows are technically clipped is meaningless - there is no signal in
+    # that region either way.
+    #
+    # score = mean_score * (1 - clipping_influence * (1 - clipping_retention))
+    #
+    # `clipping_influence` is therefore how much the clipping terms may
+    # withhold from an otherwise correctly-exposed image: at 0.45, a
+    # well-exposed but totally clipped photograph scores 0.55.
+    clipping_influence: 0.45
+    weights:
+      shadow_clip: 0.5
+      highlight_clip: 0.5
+
+  # ---- Contrast ---- #
+  contrast:
+    # RMS contrast: standard deviation of luminance.
+    rms: { floor: 10.0, good: 52.0 }
+    # 1st-to-99th percentile span; robust to a few outlier pixels.
+    dynamic_range: { floor: 45.0, good: 190.0 }
+    # Shannon entropy of the luminance histogram, in bits. A flat, washed-out
+    # image has low entropy even when its raw std looks acceptable.
+    entropy: { floor: 3.2, good: 7.0 }
+    weights:
+      rms: 0.40
+      dynamic_range: 0.30
+      entropy: 0.30
+
+  # ---- Noise ---- #
+  noise:
+    # Estimated additive Gaussian sigma, 0-255 scale. Lower is better, so the
+    # anchors are inverted.
+    sigma: { floor: 15.0, good: 1.5 }
+    # Ratio of noise sigma to local signal contrast. A noisy but high-contrast
+    # image is far more usable than the sigma alone suggests.
+    noise_to_signal: { floor: 0.45, good: 0.03 }
+    weights:
+      sigma: 0.55
+      ratio: 0.45
+
+  # ---- Resolution ---- #
+  resolution:
+    # Shorter side of the face box, in genuine source pixels.
+    # ArcFace is trained at 112 px; below ~64 px accuracy degrades sharply.
+    face_short_side: { floor: 48.0, good: 150.0 }
+    # Interocular distance in pixels. ISO/IEC 19794-5 asks for 60 px for a
+    # token image; 40 is workable for a consumer selfie flow.
+    interocular: { floor: 22.0, good: 70.0 }
+    # Share of spectral energy above half Nyquist: how much genuine detail the
+    # image carries relative to its nominal pixel count. It holds the largest
+    # weight because it is the only term that cannot be fooled by enlarging a
+    # thumbnail - the other two measure the pixel count, this measures the
+    # information actually in those pixels.
+    #   measured   pristine 4.2e-3 | upscaled2x 5.2e-4 | upscaled4x 2.5e-5
+    detail_energy: { floor: 0.00005, good: 0.005, log_scale: true }
+    weights:
+      face_size: 0.35
+      interocular: 0.25
+      detail: 0.40
+
+  # ---- Pixelation ---- #
+  #
+  # Measured image-wide and again on the canonical face crop. The two differ
+  # substantially - the reference portrait reads 0.18 globally but 0.04 on the
+  # face - because block artefacts concentrate in the flat background regions
+  # where the codec has least to encode. The face figure is the one that
+  # matters for recognition, so it carries the larger weight.
+  # Measured ladder on the reference portrait, phase-invariant blockiness:
+  #   q95 0.18 | q70 0.13 | q50 0.49 | q30 0.65 | q20 0.75 | q8 1.22 | q5 1.81
+  #   clean synthetic control 0.03, pure 8px block pattern 2.0
+  #
+  # `good` sits at 0.20 rather than near zero because a perfectly acceptable
+  # quality-90 JPEG already measures 0.18 - anchoring below that would fail
+  # every photograph a phone has ever produced.
+  pixelation:
+    # Excess edge energy on the JPEG 8x8 grid relative to off-grid positions.
+    blockiness: { floor: 1.30, good: 0.20 }
+    weights:
+      blockiness: 0.45
+      face_blockiness: 0.55
+
+  # ---- Distortion / compression artefacts ---- #
+  distortion:
+    # Posterisation: share of empty histogram bins inside the occupied range.
+    banding: { floor: 0.35, good: 0.03 }
+    # Colour fringing at high-contrast edges, in 0-255 units of R-B divergence.
+    chromatic_aberration: { floor: 14.0, good: 1.5 }
+    # Residual anisotropy after fitting the landmark set to the canonical face
+    # template - detects an image stretched non-uniformly.
+    #
+    # Two limits, both measured rather than assumed. First, the template is a
+    # population average, so an individual face legitimately differs from it:
+    # the reference portrait reads 0.12 with no distortion whatsoever. That is
+    # a noise floor, and the `good` anchor has to sit above it. Second, head
+    # yaw compresses the face horizontally through ordinary perspective, which
+    # is geometrically indistinguishable from an editor's squeeze, so the term
+    # is skipped beyond `max_yaw_for_anisotropy` rather than guessed at.
+    #
+    # Net effect: only stretches beyond roughly 1.35x are reliably detectable.
+    geometric_anisotropy: { floor: 0.50, good: 0.15 }
+    max_yaw_for_anisotropy: 20.0
+    weights:
+      banding: 0.35
+      chromatic: 0.30
+      geometric: 0.35
+
+# --------------------------------------------------------------------------- #
+# MODULE 3 - FACE EMBEDDINGS
+#
+# The embedding is the biometric. Everything downstream - matching, CNIC
+# comparison, duplicate search, and therefore the final decision - is a
+# function of these 512 numbers, so the settings here have more leverage over
+# the verification outcome than any other block in this file.
+# --------------------------------------------------------------------------- #
+embedding:
+  # Registry key of the recognition model. Changing it invalidates every
+  # cached embedding and every vector already stored in Qdrant, because
+  # embeddings from different models are not comparable at all.
+  model: face_embedder_arcface
+  dimension: 512
+
+  alignment:
+    # ArcFace was trained on faces warped onto a fixed 112x112 five-point
+    # template. Feeding it anything else - a plain box crop, a different
+    # template - degrades similarity substantially, so this is not a tunable
+    # preference but a property of the trained network.
+    output_size: [112, 112]
+
+    # A *similarity* transform (rotation, uniform scale, translation) is used
+    # rather than a full affine. A full affine would additionally shear the
+    # face to fit the template exactly, which destroys precisely the
+    # inter-landmark geometry the recogniser keys on.
+    #
+    # Residual is the mean landmark-to-template distance after warping,
+    # expressed in units of interocular distance. Above this the landmark set
+    # does not describe a plausible face and the embedding is untrustworthy.
+    max_alignment_residual: 0.28
+
+    # Without landmarks a face can still be embedded from its bounding box
+    # alone, by centring it in the template frame. Accuracy is materially
+    # worse because in-plane rotation and scale are no longer normalised, so
+    # the result is always flagged `aligned: false` for the fraud engine.
+    allow_box_fallback: true
+    # Fraction of the box added as margin in the fallback path, chosen so the
+    # resulting crop approximates the framing of a template-aligned face.
+    box_fallback_margin: 0.10
+
+  # Embed the mirrored image as well and average the two vectors. Standard
+  # InsightFace evaluation practice, and it does help - but the measured gain
+  # on this artefact is +0.0065 mean cosine on a genuine pair, for exactly 2x
+  # the inference. At ~148 ms per face on CPU that turns a seven-image request
+  # from ~0.85 s into ~1.7 s to buy less than one part in a hundred of
+  # similarity, so it is off by default and worth switching on for GPU
+  # deployments where the second pass is nearly free.
+  #
+  #   measured   blur_5 +0.0055 | jpeg_q30 +0.0083 | rot_12 +0.0074 | dark +0.0048
+  flip_augmentation: false
+
+  batch:
+    # Aligned crops are coalesced into one forward pass.
+    #
+    # Measured speed-up is 1.22x, not the order of magnitude one might expect:
+    # ONNX Runtime already parallelises a single 112x112 ResNet-50 across all
+    # cores, so a batch mostly saves per-call overhead rather than unlocking
+    # idle compute. 148 ms/face single, 121 ms/face at batch 8. Worth having,
+    # not worth restructuring the pipeline around.
+    max_size: 16
+
+  cache:
+    # Keyed on the hash of the *aligned crop*, not the source image: two
+    # slightly different detections of the same face produce different crops
+    # and must not share an entry, while a genuine repeat is a guaranteed hit.
+    enabled: true
+    # memory | redis | none
+    #
+    # An embedding is biometric data. `memory` keeps it in-process with a
+    # short TTL and it dies with the pod; `redis` persists it to a shared
+    # store outside this service's control, which is a data-protection
+    # decision rather than a performance one and is therefore off by default.
+    backend: memory
+    max_entries: 2048
+    ttl_seconds: 600
+    # Redis key prefix, used only when backend is `redis`.
+    namespace: "hqai:emb"
+
+  quality:
+    # WHAT WAS TRIED AND REJECTED
+    # ---------------------------
+    # The first draft derived confidence from ArcFace's pre-normalisation L2
+    # norm, on the MagFace/AdaFace premise that the magnitude tracks face
+    # quality. Measurement refuted that for this artefact: across a twelve-step
+    # degradation ladder the norm moved only between 22.8 and 25.5, and a
+    # 21-pixel Gaussian blur measured 25.5 against the pristine face's 23.3 -
+    # the wrong direction. Those papers *train* for the correlation with a
+    # magnitude-aware loss; vanilla ArcFace leaves the magnitude unconstrained,
+    # so the property simply is not there to exploit.
+    #
+    # The norm is still reported as a diagnostic, but nothing is decided on it.
+    #
+    # WHAT IS USED INSTEAD
+    # --------------------
+    # The alignment residual, which measurement shows is both stable and
+    # meaningful: 0.034-0.061 across every degradation of a correctly-detected
+    # face, rising as the landmark set stops describing a plausible one.
+    alignment_residual: { floor: 0.25, good: 0.06 }
+
+    # Confidence assigned when the box-only fallback ran and no residual
+    # exists. Deliberately below `min_confidence`, so a box-aligned face is
+    # always flagged. Measurement justifies the severity: the same face
+    # embedded through the template and through the box fallback scores only
+    # 0.786 against itself, and on a 25-degree rotated capture the fallback
+    # collapses to 0.573 - below any sane impostor threshold, i.e. the system
+    # would call a person a stranger purely because alignment was skipped.
+    box_fallback_confidence: 0.30
+
+    # Below this the embedding is flagged low-confidence. It is still returned
+    # and still compared - suppressing it would lose information - but the
+    # decision engine weighs the resulting match score less.
+    min_confidence: 0.35
+
+
+# --------------------------------------------------------------------------- #
+# MODULE 4 - FACE MATCHING
+#
+# THRESHOLDS ARE NOT VALIDATED
+# ----------------------------
+# The operating points below are engineering defaults drawn from the published
+# ArcFace/IJB-C literature. They have NOT been derived from a labelled dataset
+# of Hamqadam's own traffic, because none exists yet.
+#
+# `scripts/evaluate_matching.py` computes the ROC, EER and TAR-at-fixed-FAR
+# from a labelled identity corpus and prints the thresholds those curves imply.
+# Run it before production and replace these numbers with what it reports.
+#
+# Until then: on the only pair the service has been measured against, genuine
+# similarities ran 0.898-0.977 and the impostor sat at 0.011, so these
+# thresholds are comfortably inside a very large gap. A two-identity sample
+# says nothing about where the gap narrows on real traffic.
+# --------------------------------------------------------------------------- #
+matching:
+  # Cosine similarity on L2-normalised ArcFace embeddings, range [-1, 1].
+  # `strong_match` and `review` are the two decision boundaries:
+  #   >= strong_match  -> STRONG_MATCH
+  #   >= review        -> REVIEW
+  #   otherwise        -> FAILED
+  selfie_vs_profile:
+    strong_match: 0.62
+    review: 0.45
+  selfie_vs_secondary:
+    strong_match: 0.60
+    review: 0.43
+  # CNIC portraits are sub-300-dpi prints photographed through a laminate,
+  # often years old. The operating point is deliberately lower than the
+  # selfie-to-selfie one; holding a genuine document to the selfie bar would
+  # reject a large share of real users.
+  selfie_vs_cnic:
+    strong_match: 0.42
+    review: 0.30
+
+  # ---- Reported score calibration ---- #
+  #
+  # The API reports a 0-100 score, but the underlying quantity is a cosine in
+  # [-1, 1]. The obvious rescaling, (cos + 1) / 2 * 100, is actively
+  # misleading: an impostor at cosine ~0 would report 50, which reads as "half
+  # a match" when it actually means "certainly a different person".
+  #
+  # Instead the score is interpolated piecewise-linearly through the decision
+  # boundaries themselves, so the number is meaningful relative to the
+  # operating point rather than to the raw metric:
+  #
+  #     cosine <= floor_similarity   ->   0
+  #     cosine == review threshold   ->   review_score
+  #     cosine == strong threshold   ->   strong_match_score
+  #     cosine == 1.0                ->   100
+  #
+  # A reader can therefore interpret any reported score without knowing which
+  # comparison type produced it: 75+ is a strong match, 50-75 needs review,
+  # below 50 failed. That property is why the anchors are shared across the
+  # three comparison types even though their cosine thresholds differ.
+  calibration:
+    strong_match_score: 75.0
+    review_score: 50.0
+    # Cosine at or below which the reported score is zero. Zero rather than
+    # -1: negative cosine between two face embeddings carries no more
+    # information than orthogonality, and stretching the scale down to -1
+    # would waste half the range on a region nothing ever lands in.
+    floor_similarity: 0.0
+
+  # ---- Confidence propagation ---- #
+  confidence:
+    # A comparison is only as trustworthy as its weaker embedding, so the pair
+    # inherits the minimum of the two confidences rather than their average.
+    # An excellent selfie compared against a box-aligned profile photo is not
+    # a "moderately confident" comparison - it is limited by the bad one.
+    min_pair_confidence: 0.35
+    # Weight applied to a low-confidence comparison during identity
+    # aggregation. Not zero: the evidence is degraded, not absent.
+    low_confidence_weight: 0.40
+
+  # ---- Identity confidence aggregation ---- #
+  identity:
+    # Relative evidential weight of each comparison type.
+    #
+    # The CNIC carries the most because it is the only state-issued anchor in
+    # the request - the profile images are whatever the user chose to upload,
+    # and prove only that the same person appears in both.
+    weights:
+      cnic: 0.45
+      profile: 0.35
+      secondary: 0.20
+
+    # How several secondary images collapse into one score.
+    #
+    # `mean` is used rather than `max` deliberately. A secondary image that
+    # does not match is a fraud signal - somebody else's photograph on the
+    # profile - not noise to be discarded, and `max` would silently ignore it.
+    # It is not `min` either, because people legitimately upload old or odd
+    # photographs of themselves. The worst individual score is reported
+    # separately as `secondary_worst` so Module 9 can weigh it as a risk
+    # signal without it dominating the identity score.
+    secondary_aggregation: mean
+
+    # A failed CNIC comparison caps identity confidence however well the
+    # profile images match each other. Two selfies of the same person agreeing
+    # is not evidence of identity when the document says somebody else.
+    cnic_failure_cap: 45.0
+
+    # Identity confidence needs at least this many usable comparisons to mean
+    # anything. Below it the score is reported as unavailable rather than
+    # guessed from a single weak signal.
+    min_comparisons: 1
+
+# --------------------------------------------------------------------------- #
+# MODULE 5 - CNIC OCR
+# --------------------------------------------------------------------------- #
+ocr:
+  # Engine preference. Each is tried in turn; the first that imports and
+  # initialises becomes active.
+  #
+  # `onnx_ppocr` leads for an architectural reason rather than an accuracy one:
+  # it runs the same PP-OCR models on the ONNX Runtime the rest of the service
+  # already carries, instead of adding paddlepaddle as a second inference
+  # runtime to the image. `paddleocr` and `easyocr` are the engines the
+  # specification names and are fully implemented behind the same port.
+  engine_chain: [onnx_ppocr, paddleocr, easyocr]
+
+  # Recognition language for the CNIC's English side. The Urdu side is not
+  # read: the bundled PP-OCR models have no Urdu charset, and claiming to read
+  # a script the model cannot represent would be worse than not trying.
+  language: en
+
+  # PP-OCR's per-line angle classifier. Worth its cost: it is why a card
+  # photographed sideways still yields correct text, and it measured ~50 ms
+  # against the recognition stage's 2.8 s.
+  use_angle_classifier: true
+
+  # Lines below this recognition score are discarded before parsing.
+  min_line_confidence: 0.35
+
+  # Acceptance floor for detection-free crop recognition, used to recover a
+  # labelled field whose value the page detector missed.
+  #
+  # Far lower than the full-page floor, and deliberately so: the two are not
+  # on the same scale. Measured on a synthetic card, the gender glyph scored
+  # 0.24 when recognised alone against above 0.8 for the same character
+  # inside a line - because a lone glyph on a wide crop gives the
+  # recognition head almost no context. Judging it against the page floor
+  # would discard every recovery this path exists to make.
+  min_crop_confidence: 0.12
+
+  preprocessing:
+    # Locate the card in the photograph and perspective-correct it to the
+    # ISO/IEC 7810 ID-1 aspect ratio. When no card-shaped quadrilateral is
+    # found the whole frame is used instead - a wrong crop is far worse than
+    # no crop, because it removes fields entirely.
+    rectify: true
+    # Smallest share of the frame a candidate card may occupy.
+    min_card_coverage: 0.12
+    # Permitted relative deviation from the ID-1 ratio when accepting a
+    # candidate quadrilateral.
+    aspect_tolerance: 0.35
+    # Correct residual tilt after rectification.
+    deskew: true
+    # CLAHE on the lightness channel. Local rather than global, because the
+    # characteristic failure of a photographed laminated card is *uneven*
+    # illumination that a global curve cannot fix without ruining the good half.
+    enhance: true
+    clahe_clip_limit: 2.5
+    # Enlarge a card narrower than this before recognition. Adds no
+    # information, but PP-OCR's recognition head has a fixed input height and
+    # very small text degrades sharply once resampled into it.
+    min_width: 700
+
+  orientation:
+    # Resolve which way up the card is.
+    #
+    # Recognition itself does not need this - PP-OCR classifies and corrects
+    # each text line's angle independently, and measured on a rotated card it
+    # returned the same eighteen lines with the same text. Spatial reasoning
+    # does need it: the parser finds a value by looking to the right of its
+    # printed label, and on a rotated page that is a different direction.
+    enabled: true
+    # Stop as soon as a candidate orientation yields a usable document rather
+    # than trying all four. At roughly four seconds a pass, exhaustive search
+    # would cost seventeen seconds per document.
+    early_exit: true
+    # A candidate is accepted when it yields a valid identity number and at
+    # least this many recognised lines.
+    min_lines_for_acceptance: 6
+    # Hard cap on orientations attempted.
+    max_attempts: 4
+
+  # ---- Acceptance ---- #
+  # Mean confidence across the fields that were read, after validation
+  # penalties, below which the document is reported unusable.
+  min_confidence: 0.70
+  # How many of the six required fields must be read. Four leaves room for the
+  # gender glyph and one date to be missed - both common - while still
+  # requiring the identity number and enough context to be useful.
+  min_required_fields: 4
+
+  # ---- Confidence weighting ---- #
+  # The document confidence is a weighted mean over the fields that were read,
+  # scaled by completeness and reduced by validation penalties. The identity
+  # number carries the most because every downstream use depends on it.
+  field_weights:
+    cnic_number: 0.30
+    full_name: 0.20
+    date_of_birth: 0.18
+    gender: 0.12
+    date_of_issue: 0.10
+    date_of_expiry: 0.10
+
+# --------------------------------------------------------------------------- #
+# MODULE 6 - CNIC FACE MATCHING
+# --------------------------------------------------------------------------- #
+#
+# Deciding which face in a photograph of a card is the portrait printed on it.
+#
+# The attack this section exists to stop: a user holds their CNIC up in front
+# of their own face and photographs it, which is how people naturally hold a
+# card. Two faces reach the detector - the small print and the large live one -
+# and taking the larger compares the selfie against itself, passing at near
+# perfect similarity whoever the card belongs to. Measured, the live face in
+# such a frame scores cosine 0.71 against the selfie, against a CNIC
+# strong-match threshold of 0.42.
+#
+# Note what is NOT here:
+#   * portrait quality  -> quality.roles.cnic_portrait
+#   * match thresholds  -> matching.selfie_vs_cnic
+# Both would otherwise be a second place to change one policy.
+cnic_face:
+  # Isolate the card to its own quadrilateral before looking for a face. The
+  # primary defence, and the only one that rests on pixels rather than on a
+  # threshold: everything not on the card is simply gone.
+  rectify_first: true
+
+  # Search the whole frame when no card border was found. Correct - a flat
+  # scan has no border - but the result carries CNIC_CARD_BOUNDS_NOT_FOUND,
+  # because the containment guarantee then does not hold. Set false for a
+  # strict deployment that would rather refuse than rely on geometry alone.
+  allow_unrectified: true
+
+  # Upscale target before detection. On a 1012 px card the portrait's face is
+  # around 120 px across, close to where detectors start missing it.
+  detection_min_width: 1200
+
+  # Objectness floor. Below the live-image floor deliberately: a laminated
+  # sub-300-dpi print photographed through glare is a genuinely harder
+  # detection than a selfie, and the selfie bar loses real portraits.
+  min_detector_confidence: 0.35
+
+  geometry:
+    # Where the photo box may sit, as fractions of card width. BOTH sides are
+    # listed because the layout has moved between CNIC generations, and
+    # asserting one would fail closed on genuine cards of the other.
+    candidate_bands: [[0.00, 0.38], [0.62, 1.00]]
+    vertical_band: [0.10, 0.95]
+
+    # Smallest face, in pixels of the shorter side, in the image searched.
+    #
+    # A PIXEL COUNT, NOT A RATIO, and the distinction is load-bearing.
+    # Recognisability depends on how many pixels a face has, not on what share
+    # of the frame it covers; a ratio floor conflates "this is not a face" with
+    # "the card was photographed small" and rejects the genuine portrait on any
+    # card that does not fill the frame. An earlier ratio-based floor rejected
+    # a real ghost portrait at 0.35% against a 0.4% bound, which is how the
+    # error was found. Hallucinated detections are what min_detector_confidence
+    # is for.
+    #
+    # 40 px because ArcFace resamples to 112x112; below that the upscale is
+    # pure interpolation.
+    min_face_pixels: 40
+
+    # Largest face, as a share of the card. This one IS a ratio, and correctly
+    # so: an ID-1 card is 85.6 x 53.98 mm and its photo box is a fixed physical
+    # size, so the face inside occupies a bounded fraction of the card at any
+    # capture resolution. A generous 30 x 40 mm box is 26% of the card and a
+    # passport-style face fills roughly a third of its box, giving ~10% as the
+    # top of the plausible range.
+    #
+    # Measured: genuine printed portrait 0.0125 of the frame; live face in the
+    # held-up-card attack 0.183. The bound sits an order of magnitude above the
+    # genuine case and well below the attack.
+    max_face_area_ratio: 0.10
+
+    # How far outside a band a face centre may stray before containment reaches
+    # zero. Graded rather than binary, so a card cropped a few percent tight
+    # loses confidence instead of being rejected outright.
+    band_tolerance: 0.08
+
+# --------------------------------------------------------------------------- #
+# MODULE 7 - PROFILE IMAGE ANALYSIS
+# --------------------------------------------------------------------------- #
+#
+# Is this a genuine camera photograph, taken by the person uploading it? Four
+# detectors, each looking for a different way the answer can be no.
+#
+# EVERY anchor below sits in a measured gap between two populations, and the
+# populations are printed beside it. These detectors accuse a user of
+# uploading something dishonest; a threshold nobody can trace to evidence is
+# not one anybody should be accused on.
+#
+# The fixtures are in tests/fixtures/profile_images.py and the measurement
+# tables are reproduced in docs/modules/07_profile_image_analysis.md.
+profile:
+
+  # ---- Screenshot of an application ---- #
+  #
+  # The obvious measure - "rendered UI has flat regions a camera cannot make" -
+  # is FALSE, and measurement is what showed it. A quality-12 JPEG of a real
+  # photograph has exactly-zero-variance 8x8 blocks across 35% of the frame,
+  # against 36% for a real screenshot. Flatness alone cannot separate them.
+  #
+  # What works is a full-width CONSTANT ROW: a photograph's content varies
+  # horizontally somewhere along any row, so quantisation cannot flatten the
+  # whole span, while rendered chrome is written from a constant.
+  #
+  # Measured, after contiguous constant borders are stripped (see below):
+  #   genuine photograph          0.000
+  #   quality-12 JPEG             0.000     <- the hard negative
+  #   letterboxed photograph      0.000     <- see the false positive note
+  #   square-padded then JPEG     0.000
+  #   photograph of a print       0.000
+  #   screenshot                  0.175 - 0.187
+  #
+  # THE FALSE POSITIVE THAT SHAPED THIS: social apps pad uploads to a square,
+  # and a letterboxed photograph scores 0.333 on the raw measure - identical
+  # to a screenshot. The first version would have flagged a large share of
+  # honest uploads. Stripping contiguous constant rows at the frame edges
+  # before measuring separates them completely, because padding is at the
+  # edges and application chrome runs through the interior.
+  #
+  # KNOWN EVASION: cropping ~10% off a screenshot drops confidence from 1.00
+  # to 0.17, because the flat chrome then touches the new frame edge and is
+  # stripped as padding. The two are geometrically identical and cannot be
+  # told apart without semantic understanding; the trade favours not accusing
+  # innocent users, which is the right default for a check like this.
+  #
+  # Exact device resolutions are deliberately NOT used: a genuine photograph
+  # resized to 1080x1920 matches one, so the test convicts the innocent, and
+  # any attacker defeats it by cropping a single row.
+  screenshot:
+    interior_rows_floor: 0.04
+    interior_rows_ceiling: 0.15
+    min_confidence: 0.55
+
+  # ---- Photograph taken of a screen ---- #
+  #
+  # A display is a regular pixel grid; a sensor is another. Photograph one
+  # with the other and they beat together, putting an isolated symmetric pair
+  # of peaks off-axis in the Fourier transform. Natural spectra are smooth.
+  #
+  # Peak prominence above the locally-smoothed log spectrum:
+  #   genuine photograph          1.410
+  #   quality-12 JPEG             1.456
+  #   twice-recompressed          1.437
+  #   screenshot                  1.428
+  #   photograph of a print       1.411
+  #   synthetic render            1.443
+  #   photograph of a screen      3.461 - 4.220   (display pitch 3 to 8 px)
+  #
+  # Everything that is not a screen capture sits in a band 0.05 wide; a screen
+  # capture sits at two and a half times its top. The widest separation any
+  # measurement in this module achieves.
+  #
+  # OPERATING ENVELOPE, measured:
+  #   moire strength   triggers to 0.05, graded 0.03-0.05, blind below 0.02
+  #   downscaling      survives to 0.50x (256x300), lost at 0.35x (179x210)
+  #   re-encoding      survives JPEG quality 15 (confidence 0.933)
+  # So it is robust to compression and fragile to heavy downscaling. A null
+  # result is NOT evidence of a genuine capture.
+  moire:
+    # Inner edge of the search annulus: inside it lies DC, where every image
+    # has energy.
+    min_radius_fraction: 0.06
+    # Outer edge: beyond it the resample filter has already removed everything.
+    max_radius_fraction: 0.48
+    # Half-width of the excluded band along each axis. JPEG's 8x8 blocking
+    # puts a comb of energy exactly on the axes, and so does any axis-aligned
+    # texture - the one place a false positive is likely.
+    axis_exclusion: 6
+    background_sigma: 9.0
+    prominence_floor: 1.90
+    prominence_ceiling: 3.20
+    min_confidence: 0.55
+
+  # ---- Photograph of a printed photograph ---- #
+  #
+  # Share of spectral power above half Nyquist:
+  #   twice-recompressed          0.0206
+  #   genuine photograph          0.0178
+  #   synthetic render            0.0153
+  #   quality-12 JPEG             0.0121
+  #   photograph of a print       0.0021
+  #
+  # An order of magnitude below the genuine case, and below the quality-12
+  # JPEG that is the hard negative everywhere else. Anchors run DOWNWARDS:
+  # less high-frequency content is more print-like.
+  print_recapture:
+    high_frequency_floor: 0.0090
+    high_frequency_ceiling: 0.0030
+    # Corroboration: ink reaches neither true black nor paper white, so the
+    # 2nd-to-98th percentile span is compressed. Also runs downwards.
+    tonal_span_floor: 0.90
+    tonal_span_ceiling: 0.60
+    min_confidence: 0.55
+
+  # ---- Rendered artwork: avatars, cartoons, illustration ---- #
+  #
+  #                             palette   flat blocks
+  #   genuine photograph          0.286         0.000
+  #   quality-12 JPEG             0.173         0.355
+  #   screenshot                  0.235         0.359
+  #   photograph of a print       0.195         0.081
+  #   synthetic render            0.000         0.911
+  #
+  # BOTH must agree, combined as a geometric mean. A small palette alone fires
+  # on a posterised photograph; a high flat share alone fires on the
+  # quality-12 JPEG. Note the asymmetry with the screenshot detector above:
+  # flat blocks are worthless at 0.355 and decisive at 0.911, which is why
+  # every anchor here is written beside the population it separates.
+  synthetic:
+    palette_floor: 0.090
+    palette_ceiling: 0.010
+    flat_floor: 0.50
+    flat_ceiling: 0.85
+    colour_sample_size: 200000
+    min_confidence: 0.55
+
+  # ---- Verdict ---- #
+  #
+  # The authenticity score is an UPPER BOUND ON SUSPICION, not a measure of
+  # trust. 100 means these four tests found nothing; a cropped screenshot or a
+  # distant screen capture also scores 100.
+  min_authenticity_score: 55.0
+  # A profile picture with no person in it is not dishonest - it is a user who
+  # uploaded their cat - but it cannot be verified against a selfie either.
+  require_face: true
+  # A group photograph is ambiguous about which person the account belongs to.
+  flag_multiple_faces: true
+
+# --------------------------------------------------------------------------- #
+# MODULE 8 - DUPLICATE DETECTION   (implemented in Module 8)
+# --------------------------------------------------------------------------- #
+# THE THRESHOLDS BELOW ARE NOT VALIDATED, and the service says so in every
+# response. Read this block before changing them.
+#
+# A 1:N identification is not a 1:1 verification. A query compared against N
+# enrolled templates has N chances to match one by accident:
+#
+#     system false-match rate  ~  1 - (1 - per_comparison_far) ** N
+#
+# At a per-comparison FAR of 1e-4 - unremarkable for a face recogniser - the
+# rate at which a query returns a false duplicate is:
+#
+#     gallery        100     1,000    10,000   100,000
+#     system FMR    1.0%      9.5%     63.2%    100.0%
+#
+# So the operating point depends on the gallery size, and the shipped value was
+# derived against neither.
+#
+# WHY IT CANNOT BE DERIVED HERE. Modelled as isotropic random unit vectors in
+# 512 dimensions, impostors never approach the threshold - max cosine over
+# 3,000 templates is 0.214 against a threshold of 0.68, and gallery growth
+# looks harmless. That model is wrong in the unsafe direction: every enrolled
+# vector is a FACE, so they share a manifold of far lower intrinsic dimension.
+# Confining the population to a subspace and re-measuring the impostor
+# distribution over 2,000 templates:
+#
+#     effective dim   99.9th pct     max   verdict
+#               512        0.136   0.214   safe
+#               128        0.300   0.468   safe
+#                64        0.395   0.576   safe
+#                32        0.531   0.750   EXCEEDS 0.68
+#                16        0.700   0.882   EXCEEDS 0.68
+#                 8        0.877   0.986   EXCEEDS 0.68
+#
+# The answer swings from "entirely safe" to "fails always" across a parameter
+# that is a property of the recogniser and the enrolled population - and cannot
+# be estimated from the two public-domain reference faces this repository has.
+#
+# Reproduce all of the above with:
+#     python scripts/calibrate_duplicate_threshold.py --explain
+# Derive a real threshold with:
+#     python scripts/calibrate_duplicate_threshold.py --vectors templates.npy
+#
+# AND WHAT NO THRESHOLD FIXES: face recognition cannot separate identical twins
+# at any operating point, and siblings and cousins score well above chance. A
+# matrimonial platform serving extended families will enrol exactly that
+# population. Only a second factor addresses it; choosing one is the Client's
+# decision, not this service's.
+duplicate:
+  # Which gallery adapter to use.
+  #   memory - exact search over a materialised matrix. Fast (17 ms over
+  #            100,000 templates) and correct, and LOST ON RESTART. Several
+  #            replicas would each hold a different partial gallery, so whether
+  #            a duplicate was found would depend on which pod answered.
+  #   qdrant - durable and shared. Required for any multi-replica deployment.
+  backend: memory
+  qdrant:
+    # ":memory:" or a filesystem path use the client's embedded engine rather
+    # than HTTP, which is useful for a single node and for tests.
+    url: http://localhost:6333
+    collection: hamqadam_faces
+    api_key: null
+    timeout_seconds: 5.0
+    create_collection: true
+
+  # Ceiling on the in-process gallery. A guard against an unbounded leak, not a
+  # policy: evicting silently would silently stop detecting duplicates of
+  # long-standing users, so it refuses instead.
+  max_memory_records: 250000
+
+  # Cosine at or above which a hit counts as a duplicate.
+  similarity_threshold: 0.68
+  # Cosine at or above which a hit is worth a human look. Must not exceed the
+  # duplicate threshold; a validator enforces it.
+  review_threshold: 0.58
+  # How many neighbours to return. More than one because a reviewer looking at
+  # a rejected verification needs to see what else was close.
+  top_k: 10
+  # What to recommend on a duplicate. A RECOMMENDATION - the Backend's rules
+  # engine decides. Given the twin and sibling limits above, manual_review is
+  # the defensible default.
+  on_duplicate: manual_review       # manual_review | reject
+
+# --------------------------------------------------------------------------- #
+# MODULE 9 - FRAUD RISK   (implemented in Module 9)
+# --------------------------------------------------------------------------- #
+# HOW THE SCORE IS COMBINED, and why it is not a sum.
+#
+# A single fact usually produces several findings. A CNIC photographed off a
+# laptop screen makes Module 7 report a screen recapture, Module 2 report low
+# quality, Module 5 report low OCR confidence and Module 6 report a degraded
+# portrait: four findings, one fact. Adding them charges the user four times.
+#
+# So every signal carries a FAMILY. The strongest member of a family is what
+# that family contributes; families combine by noisy-OR because they are
+# independent evidence. Measured on the aggregation itself:
+#
+#   case                                   additive   naive OR   family + OR
+#   one fact: CNIC shot off a screen          100.0       77.0          69.4
+#   one fact: a blurry photograph              65.0       51.0          20.0
+#   three genuinely independent facts         100.0       94.6          94.6
+#
+# The blurry-photograph row is the one that matters. Additive scoring puts an
+# ordinary out-of-focus snapshot at 65 - the boundary of HIGH risk - purely
+# because four quality sub-scores each contributed. It is not fraud, it is a
+# bad photo, and a system that cannot tell the difference rejects honest users
+# all day.
+#
+# THE WEIGHTS ARE POLICY, NOT MEASUREMENT. There is no labelled fraud data in
+# this project, so nothing here is calibrated; every response reports
+# weights_validated: false. What has been reasoned about and measured is the
+# STRUCTURE - which findings are independent evidence and which are the same
+# fact seen twice. Retune the numbers against real outcomes; keep the grouping.
+#
+# The signal catalogue lives in src/hamqadam_ai/fraud_detection/signals.py,
+# where each weight sits beside an explanation of what the finding means. A
+# test asserts that every code the service can emit is deliberately classified
+# as scored, benign or infrastructure - an unclassified finding contributes
+# nothing and fails nothing, which is the one gap this engine cannot detect
+# about itself at runtime.
+fraud:
+  levels:
+    # Inclusive at the top: a score of exactly 30.0 is still LOW.
+    low_max: 30.0
+    medium_max: 65.0
+
+  # Ceilings on how far one kind of evidence can push the score by itself.
+  # A family with no entry here is uncapped.
+  family_caps:
+    # Capped at the LOW boundary, deliberately. Most bad photographs are just
+    # bad photographs, and no amount of blur should on its own read as
+    # dishonesty. Poor quality still combines with real findings - it just
+    # cannot manufacture one.
+    capture_quality: 0.25
+    # How a submission was staged is suggestive rather than conclusive: a
+    # second face in shot is usually a bystander, not an accomplice.
+    presentation: 0.60
+
+  # Per-code weight overrides, so the policy can be retuned without a code
+  # change. Empty by default; the defaults live next to their reasoning.
+  #   signal_weights:
+  #     DUPLICATE_FACE_DETECTED: 0.55
+  signal_weights: {}
+
+  # Checks a full request is expected to run. Used only to derive
+  # assessment_confidence - the share of intended evidence that was actually
+  # available. A missing check never changes the score: an absent check is not
+  # evidence of innocence, and treating it as such is how a fraud engine gets
+  # quietly disabled by an outage.
+  expected_checks: 6
+
+# --------------------------------------------------------------------------- #
+# MODULE 10 - DECISION ENGINE   (implemented in Module 10)
+# --------------------------------------------------------------------------- #
+decision:
+  # APPROVE requires ALL three. REJECT requires ANY of the reject rules.
+  # Anything else is MANUAL_REVIEW, which is the default rather than a
+  # fallback: an automated identity decision should abstain when the evidence
+  # does not clearly support either answer.
+  approve:
+    min_identity_confidence: 75.0
+    max_fraud_risk: 30.0
+
+    # The share of intended evidence that was actually available. Without this
+    # floor the engine approved a request that supplied only a selfie: nothing
+    # contradicted the applicant because almost nothing had been checked, and
+    # "no evidence against" was being read as "evidence for". 0.70 means at
+    # least roughly two thirds of the expected checks must have run.
+    min_assessment_confidence: 0.70
+
+  reject:
+    max_identity_confidence: 40.0
+    min_fraud_risk: 65.0

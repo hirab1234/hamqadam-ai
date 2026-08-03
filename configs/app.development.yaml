@@ -1,0 +1,36 @@
+# Development overlay.
+#
+# Loaded ONLY when app.environment is "development" - the loader reads
+# `app.<environment>.yaml` and merges it over app.yaml. Nothing here can reach a
+# production process, because a production process reads app.production.yaml
+# instead, and the production hardening validator refuses to start if any of
+# these values did somehow arrive.
+#
+# The point of this file is that `uvicorn ... --factory` should work from a fresh
+# clone. Before it existed, the shipped defaults had require_api_key: true with
+# an empty key list, so every authenticated request failed - correctly, but with
+# nothing in the documentation or the error to say which key to send.
+
+security:
+  # A well-known, non-secret local key. Safe to commit *because* it only ever
+  # loads in development, and because a production deployment that reached this
+  # file would still be refused by the hardening check.
+  #
+  # Paste this into Swagger's Authorize dialog at http://127.0.0.1:8000/docs
+  api_keys:
+    - dev-key-123
+
+  # Authentication stays ON in development. Turning it off locally would mean
+  # the auth path never runs until staging, which is how a broken security
+  # header ships - it is exactly how the missing Authorize button survived this
+  # long.
+  require_api_key: true
+
+  rate_limit:
+    # Generous locally. A developer clicking "Execute" in Swagger repeatedly is
+    # not an attacker, and a 429 in the middle of manual testing wastes time
+    # working out whether the code or the limiter refused the call.
+    enabled: true
+    requests_per_minute: 600
+    analyze_requests_per_minute: 120
+    burst: 60
