@@ -29,12 +29,13 @@ hold, a VIP fast-track.
 
 ## 2. The one call you need
 
+One request verifies, checks the duplicate gallery, decides, and enrols.
+
 ```bash
 curl -X POST https://ai.internal/v1/verify \
   -H "X-API-Key: $HQ_API_KEY" \
   -F "verification_id=ver_01HQ8XZ" \
   -F "user_reference=acct_88213" \
-  -F "enrol_on_success=true" \
   -F "live_selfie=@selfie.jpg" \
   -F "profile_image=@profile.jpg" \
   -F "cnic_image=@cnic_front.jpg" \
@@ -49,7 +50,7 @@ bytes than they need.
 |---|---|---|
 | `verification_id` | yes | Yours. Echoed back, and used as the log correlation id. |
 | `user_reference` | no | Your account identifier. Pseudonymised before it reaches any log, and **never echoed in the response**. |
-| `enrol_on_success` | no | Add this face to the duplicate gallery if approved. Default false. |
+| `enrol_on_success` | no | Override only. **Omit it** and `duplicate.enrol_policy` decides — see §5. `false` suppresses enrolment for this call. |
 | `live_selfie` | no* | The biometric reference for the whole decision. |
 | `profile_image` | no | The account's main photograph. |
 | `cnic_image` | no | Front of the card. |
@@ -181,7 +182,6 @@ Every error has the same shape. There is never a stack trace in a response.
 | 415 | `UNSUPPORTED_IMAGE_FORMAT` | no | Not a format we decode. Re-encode as JPEG or PNG. |
 | 422 | `IMAGE_DECODE_FAILED` | no | Corrupt, or a single flat colour with no detail. |
 | 422 | `IMAGE_TOO_SMALL` | no | Shorter side below 64 px. |
-| 422 | `FACE_NOT_DETECTED` | no | Enrolment only — nothing to enrol. |
 | 429 | `RATE_LIMITED` | **yes** | Honour `Retry-After`. |
 | 500 | `AI_SERVICE_ERROR` | **yes** | Retry with backoff; quote the request id. |
 | 500 | `CONFIGURATION_ERROR` | no | Our misconfiguration. Do not retry; page us. |
@@ -199,7 +199,7 @@ latter just burns its budget against a fault only we can fix. Likewise not every
 verification, which will not resolve on its own.
 
 Note the 422 family. Codes like `FACE_NOT_DETECTED` appear there because
-`/v1/duplicate/enrol` genuinely cannot proceed without a face — but the **same
+enrolment genuinely cannot proceed without a face — but the **same
 finding on `/v1/verify` returns 200**, as part of the analysis. Same code, two
 meanings, depending on whether it prevented the operation or merely described
 its outcome.
@@ -218,35 +218,62 @@ the request produces. If you do not send one, a UUID is generated and returned.
 
 ## 5. The duplicate gallery
 
-Two routes, and both matter for compliance.
+**One call does everything.** `/v1/verify` verifies, searches the gallery,
+decides, and enrols. There is no separate enrolment request — `POST
+/v1/duplicate/enrol` was removed, because a Backend could verify without ever
+calling it, leaving every duplicate search to run against an empty gallery and
+find nothing. That failure was silent.
 
-```bash
-# Enrol — separate from /v1/verify on purpose
-curl -X POST https://ai.internal/v1/duplicate/enrol \
-  -H "X-API-Key: $HQ_API_KEY" \
-  -F "reference=acct_88213" \
-  -F "live_selfie=@selfie.jpg"
+Enrolment is governed by `duplicate.enrol_policy`:
 
-# Erase — idempotent
-curl -X DELETE https://ai.internal/v1/duplicate/acct_88213 \
-  -H "X-API-Key: $HQ_API_KEY"
+| policy | enrols on |
+|---|---|
+| `never` | nothing |
+| `on_approve` | APPROVE only — **default** |
+| `unless_rejected` | APPROVE or MANUAL_REVIEW |
+
+`on_approve` leaves a real hole: an applicant sent to MANUAL_REVIEW is never
+enrolled, so their second account has nothing to collide with — the
+multi-account case the gallery exists to catch is the one it misses.
+`unless_rejected` closes it, at the cost of storing a template for someone not
+yet approved. That is a retention decision, not an engineering one.
+
+**A REJECT is never enrolled, under any policy or override.** Storing a refused
+applicant's template would make it collide with their next legitimate attempt —
+the service would manufacture a duplicate out of its own earlier refusal.
+
+You may override per request with `enrol_on_success`:
+
+- **omit it** (normal) — policy decides
+- `false` — suppress enrolment for this submission
+- `true` — force it even where policy is `never`
+
+Read the outcome from the response:
+
+```json
+"duplicate": {
+  "duplicate_found": true,
+  "best_similarity": 1.0,
+  "gallery_size": 2,
+  "store": "qdrant",
+  "candidates": [{"reference": "acct-A", "...": "..."}]
+}
 ```
 
-Enrolment is deliberately **not** a side effect of verifying. Enrolling on every
-attempt would put a *rejected* applicant's face in the gallery, where it would
-match their next legitimate attempt. Use `enrol_on_success=true` on `/v1/verify`,
-or this route explicitly.
+If `store` says `"memory"`, the gallery is **not durable** — it is lost on
+restart and not shared between replicas. Production must report `"qdrant"`.
 
-Enrolment is keyed by your reference and **replaces** rather than appends, so
-retrying it is safe — it cannot produce two templates for one person.
+### Erasure stays a route
 
-Erasure returns 200 even when the reference is absent (`removed: false,
-erased: true`). A caller retrying an erasure must not be told it failed the
-second time; that is how erasure requests get abandoned half-done. **You are
-responsible for calling this when a user exercises a deletion right** — the AI
-service has no idea a user has asked.
+```bash
+curl -X DELETE https://ai.internal/v1/duplicate/acct_88213   -H "X-API-Key: $HQ_API_KEY"
+```
 
----
+Unchanged, and still idempotent: erasing an absent reference returns 200 with
+`removed: false, erased: true`. A caller retrying must not be told it failed the
+second time — that is how erasure requests get abandoned half-done. **You are
+responsible for calling this when a user exercises a deletion right**; the AI
+service cannot know they asked.
 
 ## 6. Operations
 
@@ -271,7 +298,7 @@ For bulk work, publish to `hamqadam.verification.requests` and consume from
 {
   "verification_id": "ver_01HQ8XZ",
   "user_reference": "acct_88213",
-  "enrol_on_success": true,
+  "enrol_on_success": true,   // optional; omit to follow enrol_policy
   "live_selfie": "<base64>",
   "profile_image": "<base64>",
   "cnic_image": "<base64>",

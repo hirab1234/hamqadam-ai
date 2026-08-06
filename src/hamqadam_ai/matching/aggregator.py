@@ -210,6 +210,30 @@ class IdentityAggregator:
         effective = {key: value / weight_total for key, value in effective.items()}
 
         capped_by: str | None = None
+
+        # A failing profile comparison caps the score too, not just a failing
+        # CNIC one. Only the CNIC cap existed; a mismatching profile was
+        # averaged in at weight 0.35 and could be outvoted by a strong document
+        # match. Measured: profile 3 with CNIC 95 fused to 54.75. That stayed
+        # under 75 by arithmetic rather than by rule, and a reweighting would
+        # have quietly removed the margin.
+        if (
+            profile is not None
+            and profile.compared
+            and profile.decision is MatchDecision.FAILED
+        ):
+            cap = identity.profile_failure_cap
+            if confidence > cap:
+                reasons.append(
+                    f"The profile photograph does not match the live selfie, so "
+                    f"identity confidence was capped at {cap:.0f}. A profile "
+                    f"image of a different person contradicts the submission; "
+                    f"it is not a low score to be averaged against the "
+                    f"document match."
+                )
+                confidence = cap
+                capped_by = "profile_failure"
+
         if cnic is not None and cnic.compared and cnic.decision is MatchDecision.FAILED:
             cap = identity.cnic_failure_cap
             if confidence > cap:

@@ -1,0 +1,106 @@
+# Development override. Never use this on a server.
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml up -d
+#   uvicorn hamqadam_ai.api.app:create_app --factory --host 127.0.0.1 --port 8000
+#
+# What it is for
+# --------------
+# Running `uvicorn` on Windows - the fast edit-reload loop - while the stack
+# supplies the backing services. That does not work against the production
+# compose file alone, and it fails twice with two unrelated-looking messages:
+#
+#   [Errno 10048] error while attempting to bind on address ('127.0.0.1', 8000):
+#     only one usage of each socket address is normally permitted
+#
+#   could not reach Qdrant at http://localhost:6333:
+#     [WinError 10061] No connection could be made because the target machine
+#     actively refused it
+#
+# The first is the `api` container already holding port 8000 - the listener is
+# `com.docker.backend.exe`, Docker's port proxy, not a stray uvicorn. The second
+# is that the base file gives Qdrant `expose: 6333`, which publishes it to the
+# compose network and *not* to the host. Both are correct for production. Both
+# are useless for a host process.
+#
+# This file changes nothing in docker-compose.yml. Compose merges the two at run
+# time; the production file is not modified and stays deployable on its own.
+#
+# What is published, and why only this
+# ------------------------------------
+# Qdrant, on loopback, and nothing else. That is the whole set the host process
+# needs, which is a measured claim rather than a guess - in `development` the
+# settings tree resolves to:
+#
+#   embedding.cache.backend  memory        (not redis)
+#   duplicate.backend        qdrant
+#   duplicate.qdrant.url     http://localhost:6333
+#   queue                    absent        (the worker owns the broker, not the API)
+#
+# So uvicorn opens exactly one connection into the stack. Redis and RabbitMQ
+# keep running as containers, reachable on the compose network, with no host
+# port - a published port nothing dials is attack surface bought for nothing.
+#
+# Application configuration is untouched: `http://localhost:6333` is already the
+# shipped default, so the host process needs no environment override to find the
+# gallery. This file moves a port; it does not reconfigure the app.
+
+services:
+  # Scaled to zero: your uvicorn is the API. Leaving the container up is what
+  # produces WinError 10048, with nothing in the message to say Docker caused it.
+  api:
+    deploy:
+      replicas: 0
+
+  # Likewise. A containerised worker consumes from the same queue as anything
+  # you run locally, so jobs vanish into a process you are not watching.
+  worker:
+    deploy:
+      replicas: 0
+    # The base file has the worker depend on `api: service_healthy`. With the
+    # API scaled to zero Compose refuses the entire run - `worker is missing
+    # dependency api` - because the dependency graph is validated independently
+    # of replica counts.
+    #
+    # !override replaces the map rather than merging into it. Without the tag
+    # Compose merges depends_on, the base file's `api` entry survives, and the
+    # run still fails with the same message.
+    depends_on: !override
+      model-init: {condition: service_completed_successfully}
+      rabbitmq: {condition: service_healthy}
+
+  # The one service the host process actually dials.
+  qdrant:
+    ports:
+      # 127.0.0.1 only. Bound to any other interface this would put a gallery of
+      # biometric templates on the network with no authentication in front of
+      # it, which is why the base file publishes no port at all and why this
+      # belongs in an override you have to ask for by name.
+      - "127.0.0.1:6333:6333"
+
+  # Redis is deliberately absent from this file: it inherits the base definition
+  # unchanged - running, healthchecked, on the compose network, no host port.
+  # The host API uses an in-process cache in development, so there is nothing to
+  # publish it for.
+  rabbitmq:
+    # The base file publishes the management UI on 127.0.0.1:15672. Useful when
+    # the containerised worker is doing the work; pointless here, because with
+    # `worker` at zero replicas nothing is consuming. Dropped to keep the
+    # published set to exactly what local development uses.
+    #
+    # !override empties the list rather than merging with it; a plain
+    # `ports: []` would leave the base entry in place.
+    ports: !override []
+
+  # Prometheus scrapes one target, `api:8000` - the container this file scales
+  # to zero. Left running it would poll a host that does not exist and Grafana
+  # would render empty panels, so both are off rather than misleading.
+  #
+  # To watch metrics while developing, run the stack without this override; the
+  # containerised API serves /metrics and Prometheus finds it.
+  prometheus:
+    deploy:
+      replicas: 0
+
+  grafana:
+    deploy:
+      replicas: 0

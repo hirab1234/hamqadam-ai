@@ -34,3 +34,25 @@ security:
     requests_per_minute: 600
     analyze_requests_per_minute: 120
     burst: 60
+
+# The admin inspection routes are deliberately NOT enabled here.
+#
+#   GET    /admin/qdrant/count
+#   GET    /admin/qdrant/list?limit=50&offset=0
+#   GET    /admin/qdrant/{reference}
+#   DELETE /admin/qdrant/{reference}
+#
+# Setting `admin: {enabled: true}` in this file looks right and is wrong. The
+# loader picks the overlay from the *ambient* environment, so this file is
+# merged whenever HQ_APP__ENVIRONMENT is unset - including when something then
+# constructs a production Settings explicitly, which is exactly what validating
+# a production config from a developer machine does. The value would survive the
+# merge, the hardening validator would see admin.enabled with
+# environment=production, and it would refuse to build a config that is in fact
+# correct. `test_hardened_production_config_is_accepted` catches this.
+#
+# Turn them on per shell instead, so the flag lives for one process and cannot
+# leak into anything that constructs a production config:
+#
+#   PowerShell:  $env:HQ_ADMIN__ENABLED = "true"
+#   bash:        HQ_ADMIN__ENABLED=true uvicorn ...

@@ -11,9 +11,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from hamqadam_ai.core.config import DuplicateConfig, QdrantConfig
 from hamqadam_ai.core.constants import ImageRole
 from hamqadam_ai.core.errors import ErrorCode
-from hamqadam_ai.core.exceptions import VectorStoreError
+from hamqadam_ai.core.exceptions import (
+    DependencyUnavailableError,
+    VectorStoreError,
+)
+from hamqadam_ai.duplicate_detection import build_store
 from hamqadam_ai.duplicate_detection.base import (
     SearchHit,
     VectorRecord,
@@ -561,3 +566,68 @@ def test_a_search_hit_is_rendered_faithfully() -> None:
 
     assert hit.reference == "alice"
     assert hit.similarity == pytest.approx(0.75)
+
+
+class TestQdrantIsTheDefault:
+    """The shipped default must be durable, and must not degrade silently.
+
+    Both halves were measured problems. The default was `memory`, so a stock
+    deployment reported `store: "memory"` and lost every template on restart -
+    a face found as a duplicate at cosine 1.0 was approved after a restart with
+    gallery_size back to 0. And the Qdrant path fell back to memory
+    *unconditionally* when unreachable, so a misconfigured URL produced the same
+    silent loss while logging only an error nobody reads on a 200 OK.
+    """
+
+    def test_the_shipped_default_is_qdrant(self) -> None:
+        assert DuplicateConfig().backend == "qdrant"
+
+    def test_the_default_url_is_a_server_not_an_on_disk_path(self) -> None:
+        """Deliberately the reverse of what this test asserted before.
+
+        The embedded on-disk engine was the default because it gave a single
+        node durability with nothing else to install. Two properties made it
+        wrong for a deployment, and both were observed here rather than
+        theorised:
+
+        * it takes an **exclusive lock** on its directory, so a second API
+          replica cannot open the gallery at all; and
+        * a hard crash leaves that lock behind, so the next start refuses -
+          which bit during testing, with `Storage folder ./data/qdrant is
+          already accessed by another instance`.
+
+        A server has neither problem. The cost is that a stock deployment now
+        needs a Qdrant container running, which `deploy/docker-compose.yml`
+        provides and the VPS guide documents.
+        """
+        url = DuplicateConfig().qdrant.url
+        assert url.startswith(("http://", "https://")), (
+            "the default gallery endpoint must be a Qdrant server; an embedded "
+            "path cannot be shared between replicas and strands its own lock "
+            "on a crash"
+        )
+        assert url != ":memory:"
+
+    def test_silent_fallback_is_off_by_default(self) -> None:
+        assert DuplicateConfig().allow_memory_fallback is False
+
+    def test_an_unreachable_qdrant_refuses_rather_than_degrading(self) -> None:
+        """Fail loudly. A non-durable fraud control that reports healthy is worse
+        than one that will not start.
+        """
+        config = DuplicateConfig(
+            backend="qdrant",
+            qdrant=QdrantConfig(url="http://127.0.0.1:59999", timeout_seconds=1.0),
+            allow_memory_fallback=False,
+        )
+        with pytest.raises((VectorStoreError, DependencyUnavailableError)):
+            build_store(config, dimension=512)
+
+    def test_the_downgrade_is_available_when_opted_into(self) -> None:
+        """Explicit is fine; implicit is not."""
+        config = DuplicateConfig(
+            backend="qdrant",
+            qdrant=QdrantConfig(url="http://127.0.0.1:59999", timeout_seconds=1.0),
+            allow_memory_fallback=True,
+        )
+        assert build_store(config, dimension=512).name == "memory"

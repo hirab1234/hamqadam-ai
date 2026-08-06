@@ -61,14 +61,15 @@ class VerificationRequest(StrictModel):
             "duplicate of themselves."
         ),
     )
-    enrol_on_success: bool = Field(
-        default=False,
+    enrol_on_success: bool | None = Field(
+        default=None,
         description=(
-            "Add the live selfie to the duplicate gallery if the verification "
-            "is recommended for approval. Off by default: enrolling a rejected "
-            "applicant's face would make it match their next legitimate "
-            "attempt. The Backend usually enrols separately, once it has "
-            "decided."
+            "Per-request override for gallery enrolment. **Leave unset** and "
+            "the configured `duplicate.enrol_policy` decides, which is the "
+            "normal case: one call to this endpoint verifies, checks the "
+            "gallery and enrols, with no second request needed. Pass `false` "
+            "to suppress enrolment for one submission, or `true` to force it "
+            "where policy is `never`."
         ),
     )
 

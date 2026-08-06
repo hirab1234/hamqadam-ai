@@ -43,10 +43,30 @@ uvicorn hamqadam_ai.api.app:create_app --factory --port 8000
 Or bring up the whole stack — API, worker, Qdrant, Redis, RabbitMQ, Prometheus,
 Grafana:
 
+Generate the local secrets once, then start it:
+
 ```bash
-HQ_API_KEYS=your-key RABBITMQ_PASSWORD=… GRAFANA_PASSWORD=… \
-  docker compose -f deploy/docker-compose.yml up -d
+python scripts/make_dev_env.py
 ```
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+`make_dev_env.py` writes `deploy/.env` with randomly generated development
+secrets and prints the API key. The file is gitignored and is never overwritten
+without `--force`.
+
+The compose file guards those variables with `${VAR:?}`, so a run without them
+fails immediately naming the missing one. That guard is what stops a real
+deployment starting with an unset password, and it is unchanged — the script
+supplies values rather than removing the check. **On a server, generate a fresh
+file there or supply the variables from your secret manager; never copy a
+development `.env` to production.**
+
+First start runs a one-shot `model-init` service that downloads ~200 MB of
+weights into a shared volume. `api` and `worker` wait for it to exit 0, so a
+cold stack takes a few minutes before `/ready` turns green.
 
 ---
 

@@ -16,6 +16,7 @@ model store is empty.
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -366,3 +367,26 @@ def temp_root(tmp_path: Path) -> Iterator[Path]:
     root = tmp_path / "scratch"
     root.mkdir()
     yield root
+
+# --------------------------------------------------------------------------- #
+# Gallery isolation
+# --------------------------------------------------------------------------- #
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Keep the duplicate gallery out of the tests.
+
+    The shipped default is an **on-disk** Qdrant, which is right for a
+    deployment and wrong for a test run: a face enrolled by one test would be
+    found as a duplicate by the next, and by every future run of the suite. The
+    tests would pass or fail depending on what an earlier run happened to
+    write.
+
+    Pinned to the in-process store, which starts empty every time. The Qdrant
+    adapter itself is still covered - `test_vector_store_contract.py` and
+    `test_duplicate_service.py` exercise it directly against an embedded
+    instance, which is the right place to test a storage adapter.
+
+    Set before any test imports settings, so the singleton is built with it.
+    """
+    os.environ.setdefault("HQ_DUPLICATE__BACKEND", "memory")

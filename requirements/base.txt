@@ -23,6 +23,13 @@ scipy==1.14.1
 # --- Inference ------------------------------------------------------------- #
 onnxruntime==1.20.1
 
+# The DEFAULT CNIC OCR engine. Absent from every requirements file until now,
+# which meant the container silently fell back to easyocr while the host used
+# this - two different recognisers, different accuracy, and every OCR figure
+# ever measured came from the one that was not deployed. The logs said so all
+# along: `"engine": "easyocr", "requested": "onnx_ppocr"`.
+rapidocr-onnxruntime==1.2.3
+
 # --- Operations ------------------------------------------------------------ #
 structlog==24.4.0
 PyYAML==6.0.2

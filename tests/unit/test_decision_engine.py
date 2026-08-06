@@ -187,3 +187,67 @@ class TestReasons:
                 # reviewer can act on the response without also holding the
                 # configuration file open.
                 assert any(ch.isdigit() for ch in reason.message)
+
+
+class TestRejectingConditions:
+    """Categorical adverse findings must REJECT, not go to review.
+
+    `blocking` and `rejecting` mean opposite things and were briefly conflated:
+    a confirmed duplicate was routed through `blocking`, which yields
+    MANUAL_REVIEW - inverting a deliberate `on_duplicate=reject` policy into a
+    review. Blocking is "the evidence to decide was never produced";
+    rejecting is "the evidence is in and it is adverse".
+    """
+
+    def test_a_rejecting_condition_yields_reject(self, engine: DecisionEngine) -> None:
+        outcome = _decide(engine, rejecting=["DUPLICATE_FACE_CONFIRMED"])
+        assert outcome.recommendation is Recommendation.REJECT  # type: ignore[attr-defined]
+        assert outcome.blocked_by == "DUPLICATE_FACE_CONFIRMED"  # type: ignore[attr-defined]
+
+    def test_it_wins_over_otherwise_perfect_evidence(
+        self, engine: DecisionEngine
+    ) -> None:
+        """A duplicate must not be outvoted by a strong biometric match.
+
+        The whole point is that the face genuinely matches - it matches an
+        account that already exists.
+        """
+        outcome = _decide(
+            engine,
+            identity_confidence=99.0,
+            fraud_risk=0.0,
+            rejecting=["DUPLICATE_FACE_CONFIRMED"],
+        )
+        assert outcome.recommendation is Recommendation.REJECT  # type: ignore[attr-defined]
+
+    def test_it_does_not_depend_on_the_fraud_score(
+        self, engine: DecisionEngine
+    ) -> None:
+        """The reason this exists.
+
+        A duplicate does reach REJECT through fraud - weight 0.70 aggregates to
+        about 70, over the 65 threshold - but only by coincidence of tuning.
+        With fraud pinned at zero the rejection must still hold.
+        """
+        outcome = _decide(
+            engine, fraud_risk=0.0, rejecting=["DUPLICATE_FACE_CONFIRMED"]
+        )
+        assert outcome.recommendation is Recommendation.REJECT  # type: ignore[attr-defined]
+
+    def test_the_reason_is_stated_as_satisfied(self, engine: DecisionEngine) -> None:
+        """A rejecting finding is evidence that IS present, so satisfied=True.
+
+        The opposite of a blocking condition, which reports satisfied=False
+        because something was missing.
+        """
+        outcome = _decide(engine, rejecting=["DUPLICATE_FACE_CONFIRMED"])
+        reason = outcome.reasons[0]  # type: ignore[attr-defined]
+        assert reason.satisfied is True
+        assert "already enrolled" in reason.message
+
+    def test_review_policy_uses_blocking_instead(
+        self, engine: DecisionEngine
+    ) -> None:
+        """`on_duplicate=manual_review` routes through blocking, not rejecting."""
+        outcome = _decide(engine, blocking=["DUPLICATE_FACE_NEEDS_REVIEW"])
+        assert outcome.recommendation is Recommendation.MANUAL_REVIEW  # type: ignore[attr-defined]

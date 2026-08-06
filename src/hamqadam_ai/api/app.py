@@ -3,8 +3,7 @@
 Endpoints
 ---------
 ========================================  ====================================
-``POST /v1/verify``                       run a full verification
-``POST /v1/duplicate/enrol``              add a face to the gallery
+``POST /v1/verify``                       verify, check duplicates, enrol
 ``DELETE /v1/duplicate/{reference}``      erase a face from the gallery
 ``GET  /health``                          liveness - is the process alive
 ``GET  /ready``                           readiness - can it serve traffic
@@ -36,6 +35,7 @@ writes an image to disk.
 from __future__ import annotations
 
 import contextlib
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -95,6 +95,77 @@ def _build_state(settings: Settings) -> dict[str, Any]:
     }
 
 
+#: Serialises recovery attempts. Sync endpoints run in Starlette's threadpool,
+#: so several requests can find a broken state at the same moment; without this
+#: each would rebuild the pipeline concurrently.
+_recovery_lock = threading.Lock()
+
+#: Monotonic timestamp of the last recovery attempt.
+_recovery: dict[str, float] = {}
+
+#: Minimum gap between recovery attempts. A backend that is still down should
+#: cost one reconnect per interval, not one per request.
+RECOVERY_COOLDOWN_SECONDS = 10.0
+
+
+def recover_state() -> Any:
+    """Retry a failed startup, at most once per cooldown.
+
+    Startup builds the pipeline once, and a backend that is unreachable at that
+    moment - Qdrant during a Docker restart is the common case - leaves the
+    process serving ``MODEL_NOT_LOADED`` for the rest of its life. The backend
+    coming back does not heal it, because nothing tries again. That is a
+    restart an operator has to know to perform, prompted by an error naming a
+    model rather than a socket.
+
+    Retrying is cheap here, which is what makes this worth doing rather than
+    just documenting the restart: the model registry is process-wide and holds
+    its loaded weights, and the Qdrant connection is made *after* every model
+    has loaded, so the second attempt reuses the sessions already in memory and
+    only redials the socket.
+
+    Returns:
+        The pipeline, or None if it still cannot be built. None keeps the
+        caller's existing error path intact - this widens no contract and
+        introduces no fallback store.
+    """
+    pipeline = _state.get("pipeline")
+    if pipeline is not None:
+        return pipeline
+
+    with _recovery_lock:
+        # Another thread may have rebuilt it while this one waited on the lock.
+        pipeline = _state.get("pipeline")
+        if pipeline is not None:
+            return pipeline
+
+        now = time.monotonic()
+        if now - _recovery.get("attempted_at", -RECOVERY_COOLDOWN_SECONDS) < (
+            RECOVERY_COOLDOWN_SECONDS
+        ):
+            return None
+        _recovery["attempted_at"] = now
+
+        settings = (
+            _state.get("settings") or _configured.get("settings") or get_settings()
+        )
+        try:
+            _state.update(_build_state(settings))
+        except Exception as exc:  # noqa: BLE001 - report, do not crash the server
+            _state.update(
+                {
+                    "pipeline": None,
+                    "ready": False,
+                    "ready_error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            log.warning("api.recovery_failed", reason=str(exc))
+            return None
+
+        log.info("api.recovered", note="a previously failed startup now succeeded")
+        return _state.get("pipeline")
+
+
 @asynccontextmanager
 async def lifespan(_app: Any) -> AsyncIterator[None]:
     """Load models at startup, release them at shutdown.
@@ -128,7 +199,11 @@ async def lifespan(_app: Any) -> AsyncIterator[None]:
                 "ready_error": f"{type(exc).__name__}: {exc}",
             }
         )
-        log.error("api.startup_failed", reason=str(exc))
+        log.error(
+            "api.startup_failed",
+            reason=str(exc),
+            note="the first request will retry; see recover_state",
+        )
 
     yield
 
@@ -333,4 +408,11 @@ def get_state() -> dict[str, Any]:
     return _state
 
 
-__all__ = ["create_app", "get_state", "lifespan", "pseudonymise"]
+__all__ = [
+    "RECOVERY_COOLDOWN_SECONDS",
+    "create_app",
+    "get_state",
+    "lifespan",
+    "pseudonymise",
+    "recover_state",
+]

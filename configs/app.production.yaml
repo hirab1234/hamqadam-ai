@@ -1,0 +1,62 @@
+# Production overlay.
+#
+# Loaded ONLY when app.environment is "production" - the loader reads
+# `app.<environment>.yaml` and deep-merges it over app.yaml. Development keeps
+# the lighter defaults in app.development.yaml, so nothing here changes local
+# behaviour.
+#
+# Secrets are NOT here. They arrive as HQ_-prefixed environment variables, and
+# the production hardening validator refuses to start without them.
+
+duplicate:
+  # The single most important production setting in this file.
+  #
+  # The default is `memory`: an in-process NumPy matrix that is fast and correct
+  # but **lost on restart and not shared between replicas**. That was measured,
+  # not assumed - a face enrolled before a restart was found as a duplicate at
+  # cosine 1.0, and after the restart the same face was approved with
+  # gallery_size back to 0.
+  #
+  # With several replicas it is worse than useless: whether a duplicate is
+  # detected depends on which pod happens to answer, so an attacker only has to
+  # retry until they hit a pod with an empty gallery.
+  backend: qdrant
+
+  qdrant:
+    # Overridden by HQ_DUPLICATE__QDRANT__URL. Three forms are accepted:
+    #
+    #   http://qdrant:6333   a Qdrant server - what docker-compose runs
+    #   /var/lib/hamqadam/qdrant   embedded, on-disk, single node
+    #   :memory:             embedded and ephemeral; tests only
+    #
+    # The on-disk form is genuinely durable: verified by enrolling in one
+    # process and reading the records back in a fresh one.
+    url: http://qdrant:6333
+    collection: hamqadam_faces
+    timeout_seconds: 5.0
+    create_collection: true
+
+  # Which outcomes write to the gallery when the caller asks for enrolment.
+  #
+  # Left at the conservative default deliberately. `unless_rejected` also
+  # enrols reviewed applicants, which closes the hole where a fraudster whose
+  # first attempt went to review has nothing for their second account to
+  # collide with - but it stores a template for someone not yet approved, and
+  # whether that is lawful depends on a retention basis I cannot decide.
+  enrol_policy: on_approve
+
+logging:
+  # The hardening validator requires both of these in production.
+  renderer: json
+  level: INFO
+  redaction:
+    enabled: true
+
+model_store:
+  # Refuse to load an artefact whose digest does not match the lock file.
+  verify_checksum: true
+
+server:
+  cors:
+    # No wildcard in production; the validator rejects "*".
+    allow_origins: []

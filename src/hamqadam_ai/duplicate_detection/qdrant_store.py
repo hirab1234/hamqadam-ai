@@ -112,13 +112,25 @@ class QdrantVectorStore(VectorStore):
         self._dimension = dimension
 
         try:
-            # ``:memory:`` and bare filesystem paths go to the client's
-            # embedded engine, which takes `location` rather than `url`.
+            # Three modes, and the client wants a different keyword for each.
+            #
+            # ``:memory:``     -> location=":memory:"   ephemeral, dies with the process
+            # a filesystem dir -> path="/var/lib/..."   embedded and DURABLE
+            # an http(s) URL   -> url="http://..."      a Qdrant server
+            #
+            # `path` rather than `location` for a directory is the part that was
+            # wrong. `location` is parsed as a URL, so a perfectly good path was
+            # rejected with "Unknown scheme: c" on Windows (`C:/data`) and would
+            # have silently become a *hostname* on Linux (`/var/lib/qdrant`),
+            # producing a connection error rather than an on-disk gallery. The
+            # documented "or a filesystem path" mode simply did not work.
             self._local = url == ":memory:" or not url.startswith(
                 ("http://", "https://")
             )
-            if self._local:
-                self._client = QdrantClient(location=url)
+            if url == ":memory:":
+                self._client = QdrantClient(location=":memory:")
+            elif self._local:
+                self._client = QdrantClient(path=url)
             else:
                 self._client = QdrantClient(
                     url=url, api_key=api_key, timeout=int(timeout_seconds)
@@ -291,6 +303,62 @@ class QdrantVectorStore(VectorStore):
                 cause=exc,
             ) from exc
         return True
+
+    def list_references(
+        self, *, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """Enumerate stored references.
+
+        ``with_vectors=False`` is not an optimisation. A 512-float template is
+        biometric data, and an inspection endpoint that returns it turns a
+        debugging aid into an exfiltration route.
+        """
+        try:
+            points, _ = self._client.scroll(
+                collection_name=self._collection,
+                limit=limit + offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise VectorStoreError(
+                f"could not scroll Qdrant points: {exc}",
+                details={"collection": self._collection},
+                cause=exc,
+            ) from exc
+
+        rows = [self._describe(point.payload or {}) for point in points]
+        rows.sort(key=lambda row: str(row.get("reference") or ""))
+        return rows[offset : offset + limit]
+
+    def get(self, reference: str) -> dict[str, Any] | None:
+        """One record's metadata, or ``None``. Vectors are never returned."""
+        try:
+            found = self._client.retrieve(
+                collection_name=self._collection,
+                ids=[point_id(reference)],
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise VectorStoreError(
+                f"could not look up a Qdrant point: {exc}",
+                details={"collection": self._collection},
+                cause=exc,
+            ) from exc
+        if not found:
+            return None
+        return self._describe(found[0].payload or {})
+
+    @staticmethod
+    def _describe(payload: dict[str, Any]) -> dict[str, Any]:
+        """Render a payload for inspection, without the vector."""
+        return {
+            "reference": payload.get(FIELD_REFERENCE),
+            "model_version": payload.get(FIELD_MODEL_VERSION),
+            "enrolled_at": payload.get(FIELD_ENROLLED_AT),
+            "metadata": payload.get(FIELD_METADATA) or {},
+        }
 
     def count(self, *, model_version: str | None = None) -> int:
         """How many templates are enrolled."""

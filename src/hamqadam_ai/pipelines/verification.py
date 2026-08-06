@@ -68,7 +68,11 @@ from hamqadam_ai.decision.engine import DecisionEngine
 from hamqadam_ai.embeddings.base import FaceEmbedding
 from hamqadam_ai.fraud_detection import SignalCollector
 from hamqadam_ai.logging.setup import get_logger
-from hamqadam_ai.observability import record_budget_exhausted, record_verification
+from hamqadam_ai.observability import (
+    record_budget_exhausted,
+    record_verification,
+    set_gallery_size,
+)
 from hamqadam_ai.schemas.common import AnalysisWarning, ModelVersions, ProcessingTime
 from hamqadam_ai.schemas.verification import (
     StageStatus,
@@ -261,7 +265,10 @@ class VerificationPipeline:
             fraud_risk=fraud.fraud_risk_score if fraud else 0.0,
             fraud_level=fraud.fraud_risk_level if fraud else RiskLevel.LOW,
             assessment_confidence=fraud.assessment_confidence if fraud else 0.0,
-            blocking=self._blocking_conditions(selfie, matching),
+            blocking=self._blocking_conditions(
+                selfie, matching, duplicate, stages
+            ),
+            rejecting=self._rejecting_conditions(duplicate),
         )
 
         if cnic_authenticity is not None and cnic_authenticity.triggered:
@@ -312,9 +319,7 @@ class VerificationPipeline:
             deadline=deadline,
         )
 
-        if request.enrol_on_success and (
-            result.recommendation is Recommendation.APPROVE
-        ):
+        if self._should_enrol(result.recommendation, request.enrol_on_success):
             self._enrol(selfie_embedding, request.user_reference)
 
         record_verification(result)
@@ -547,6 +552,40 @@ class VerificationPipeline:
             secondary_labels=[f"secondary[{i}]" for i in range(len(secondaries))],
         )
 
+    def _should_enrol(
+        self, recommendation: Recommendation, override: bool | None
+    ) -> bool:
+        """Whether this outcome writes to the gallery.
+
+        Configuration decides; the request may override. That ordering is what
+        makes one ``/v1/verify`` call sufficient - previously enrolment required
+        the caller to pass ``enrol_on_success=true`` *and* the result to be an
+        APPROVE, so a Backend that did not know to set the flag silently never
+        populated the gallery, and every duplicate search ran against nothing.
+
+        Args:
+            recommendation: What the decision engine concluded.
+            override: The request's ``enrol_on_success``. ``None`` - the normal
+                case - defers to policy. ``False`` suppresses enrolment for this
+                one submission; ``True`` forces it even where policy is
+                ``never``.
+
+        A REJECT is never enrolled under any policy, including a forced
+        override: storing a refused applicant's face would make it collide with
+        their next legitimate attempt.
+        """
+        if recommendation is Recommendation.REJECT:
+            return False
+        if override is not None:
+            return override
+
+        policy = self._settings.duplicate.enrol_policy
+        if policy == "never":
+            return False
+        if policy == "unless_rejected":
+            return True
+        return recommendation is Recommendation.APPROVE
+
     def _enrol(
         self, embedding: FaceEmbedding | None, reference: str | None
     ) -> None:
@@ -557,6 +596,13 @@ class VerificationPipeline:
             self._services["duplicate"].enrol(embedding, reference=reference)
         except Exception as exc:  # noqa: BLE001 - enrolment must not fail a verify
             log.warning("verification.enrolment_failed", reason=str(exc))
+            return
+
+        # Keep the gauge honest now that this is the only place that enrols.
+        try:
+            set_gallery_size(int(self._services["duplicate"].gallery_size()))
+        except Exception as exc:  # noqa: BLE001 - a metric must not fail a verify
+            log.debug("verification.gallery_size_unavailable", reason=str(exc))
 
     # -- Aggregation ---------------------------------------------------------- #
 
@@ -634,17 +680,106 @@ class VerificationPipeline:
 
         return service.assess_from_signals(collector)
 
-    @staticmethod
     def _blocking_conditions(
-        selfie: dict[str, Any] | None, matching: Any
+        self,
+        selfie: dict[str, Any] | None,
+        matching: Any,
+        duplicate: Any,
+        stages: dict[str, _Stage],
     ) -> list[str]:
-        """Conditions that make a recommendation impossible rather than negative."""
+        """Conditions that make a recommendation impossible rather than negative.
+
+        A confirmed duplicate is here rather than left to the fraud score alone.
+        The score route does work - a duplicate carries weight 0.70, which
+        aggregates to about 70 and clears the reject threshold of 65 - but it
+        works by arithmetic coincidence. Retune the weight, raise the reject
+        threshold, or let a family cap bite, and the same face on two accounts
+        could quietly start being approved with no test failing.
+
+        A confirmed duplicate is a categorical finding: this face is already
+        enrolled under a different reference. Stating that directly means the
+        outcome no longer depends on where a threshold happens to sit.
+        """
         blocking: list[str] = []
         if selfie is None or selfie.get("embedding") is None:
             blocking.append("NO_LIVE_SELFIE")
         elif matching is None or not getattr(matching, "identity_available", False):
             blocking.append("NO_IDENTITY_COMPARISON")
+
+        if (
+            duplicate is not None
+            and getattr(duplicate, "duplicate_found", False)
+            and self._settings.duplicate.on_duplicate != "reject"
+        ):
+            blocking.append("DUPLICATE_FACE_NEEDS_REVIEW")
+
+        # Every mandatory stage must have run *and* succeeded before an
+        # automatic approval is possible.
+        #
+        # This closes a demonstrated false approval. A submission carried a
+        # profile photograph of a different person and the profile stage failed
+        # mid-request. Module 4 renormalises identity weights over the
+        # comparisons that produced a result, so the absent profile comparison
+        # was dropped, the weights collapsed to `{cnic: 1.0}`, and identity
+        # confidence became the CNIC score alone - 95.0. With
+        # `assessment_confidence` at 5/6 = 0.83, over the 0.70 floor, every
+        # approve condition was satisfied and the answer was APPROVE.
+        #
+        # The wrong photograph was never compared, so it never counted against
+        # the applicant. `assessment_confidence` did not save it either: losing
+        # one of six checks still leaves 0.83, and that field is a *ratio*, so
+        # it cannot distinguish which check was lost. Losing the profile
+        # comparison and losing the moiré observation score identically.
+        #
+        # Named stages, not a ratio. An absent mandatory stage is not a smaller
+        # number - it is a different question, and the only honest answer is
+        # that the verification did not happen.
+        incomplete = self._incomplete_mandatory_stages(stages)
+        if incomplete:
+            log.warning(
+                "verification.mandatory_stage_incomplete",
+                stages=incomplete,
+                note="approval is impossible; routed to manual review",
+            )
+            blocking.append("MANDATORY_STAGE_INCOMPLETE")
         return blocking
+
+    def _incomplete_mandatory_stages(
+        self, stages: dict[str, _Stage]
+    ) -> list[str]:
+        """Mandatory stages that did not run, or ran and failed.
+
+        Reads the pipeline's own stage record rather than inferring from scores.
+        That is the point: a score cannot distinguish "this evidence was never
+        requested" from "this evidence was requested and did not arrive", and
+        those must lead to opposite outcomes. Only the stage record knows.
+
+        A stage absent from the record entirely counts as incomplete - if the
+        pipeline never created it, its input was never supplied, and a
+        verification missing a mandatory input is not one that can be approved.
+        """
+        failed: list[str] = []
+        for name in self._settings.decision.approve.mandatory_stages:
+            stage = stages.get(name)
+            if stage is None or not stage.ran or not stage.succeeded:
+                failed.append(name)
+        return failed
+
+    def _rejecting_conditions(self, duplicate: Any) -> list[str]:
+        """Categorical adverse findings that refuse the verification outright.
+
+        Only reached when `duplicate.on_duplicate == "reject"`. Kept apart from
+        the blocking list because blocking yields MANUAL_REVIEW - routing a
+        duplicate through it would have inverted a deliberate reject policy into
+        a review.
+        """
+        if (
+            duplicate is not None
+            and getattr(duplicate, "duplicate_found", False)
+            and self._settings.duplicate.on_duplicate == "reject"
+        ):
+            return ["DUPLICATE_FACE_CONFIRMED"]
+        return []
 
     def _to_schema(
         self,

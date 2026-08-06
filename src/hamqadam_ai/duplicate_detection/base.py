@@ -211,6 +211,39 @@ class VectorStore(abc.ABC):
     def close(self) -> None:
         """Release any connection held by the adapter."""
 
+    # -- Inspection ------------------------------------------------------- #
+    #
+    # Non-abstract on purpose. These serve the admin/debug routes only; the
+    # verification pipeline never calls them. Making them abstract would break
+    # every test double that implements the six operating methods, and an
+    # adapter with no efficient scan is entitled to decline.
+
+    def list_references(
+        self, *, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """Enumerate stored references, newest-agnostic order.
+
+        **Never returns the vectors.** A 512-float template is biometric data;
+        an inspection endpoint that hands it out turns a debugging aid into an
+        exfiltration route. Only the reference, model version and enrolment
+        timestamp are exposed.
+
+        Raises:
+            NotImplementedError: when the adapter cannot scan.
+        """
+        raise NotImplementedError(
+            f"the {self.name} adapter does not support enumeration"
+        )
+
+    def get(self, reference: str) -> dict[str, Any] | None:
+        """One record's metadata, or ``None`` when absent.
+
+        Vectors are omitted for the same reason as above.
+        """
+        raise NotImplementedError(
+            f"the {self.name} adapter does not support single-record lookup"
+        )
+
     def health(self) -> dict[str, Any]:
         """Adapter status for ``/health``."""
         return {"store": self.name, "available": True}

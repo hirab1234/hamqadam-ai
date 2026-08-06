@@ -337,22 +337,34 @@ class TestFullVerification:
 class TestGallery:
     """Enrolment and erasure."""
 
-    def test_enrol_then_erase_is_idempotent(
+    def test_verify_enrols_then_erase_is_idempotent(
         self, client: Any, portrait: BgrImage
     ) -> None:
-        """A retried erasure must not be told it failed.
+        """One /v1/verify call enrols; DELETE removes; a retried DELETE succeeds.
 
-        That is how erasure requests get abandoned half-done, which for
-        biometric templates is a compliance failure rather than a nuisance.
+        There is no longer a POST /v1/duplicate/enrol to call. That route was
+        removed because a Backend could verify without ever calling it, leaving
+        every duplicate search to run against an empty gallery - failing open,
+        silently. Enrolment now happens inside /v1/verify under
+        `duplicate.enrol_policy`.
+
+        Erasure stays a route: only the Backend knows when a user asked to be
+        forgotten. It is idempotent because a caller retrying must not be told
+        it failed the second time - that is how erasure requests get abandoned
+        half-done, which for biometric templates is a compliance failure.
         """
         headers = {"X-API-Key": API_KEY}
-        enrolled = client.post(
-            "/v1/duplicate/enrol",
+        verified = client.post(
+            "/v1/verify",
             headers=headers,
-            data={"reference": "acct-erase-me"},
+            data={
+                "verification_id": "v-enrol-then-erase",
+                "user_reference": "acct-erase-me",
+                "enrol_on_success": "true",
+            },
             files={"live_selfie": ("s.jpg", _encode(portrait), "image/jpeg")},
         )
-        assert enrolled.status_code == 200, enrolled.text
+        assert verified.status_code == 200, verified.text
 
         first = client.delete("/v1/duplicate/acct-erase-me", headers=headers)
         assert first.status_code == 200
@@ -363,23 +375,53 @@ class TestGallery:
         assert second.json()["erased"] is True
         assert second.json()["removed"] is False
 
-    def test_enrolling_a_faceless_image_is_refused(self, client: Any) -> None:
-        """Textured but faceless, so it reaches the detector.
+    def test_the_enrol_endpoint_is_gone(self, client: Any) -> None:
+        """Pin the removal, so it cannot quietly come back.
 
-        A *uniform* image never gets that far - see the test below - so using
-        one here would have asserted the right outcome for the wrong reason.
+        Two routes that both write to the gallery is the condition that made it
+        possible to verify and never enrol.
+
+        405 rather than 404: `/v1/duplicate/{reference}` still matches this path
+        for DELETE, so the router reports the method as not allowed rather than
+        the path as unknown. Either answer means the same thing to a caller -
+        there is no POST here - and asserting on the set keeps the test honest
+        about which one FastAPI actually returns.
+        """
+        response = client.post(
+            "/v1/duplicate/enrol",
+            headers={"X-API-Key": API_KEY},
+            data={"reference": "acct-x"},
+        )
+        assert response.status_code in {404, 405}
+        assert "/v1/duplicate/enrol" not in client.get("/openapi.json").json()[
+            "paths"
+        ]
+
+    def test_a_faceless_image_yields_no_enrolment(
+        self, client: Any
+    ) -> None:
+        """Nothing to embed means nothing to store, and no crash.
+
+        Textured but faceless, so it reaches the detector - a *uniform* image is
+        refused earlier at decode.
         """
         noise = np.random.default_rng(3).integers(
             0, 255, (320, 320, 3), dtype=np.uint8
         )
         response = client.post(
-            "/v1/duplicate/enrol",
+            "/v1/verify",
             headers={"X-API-Key": API_KEY},
-            data={"reference": "acct-no-face"},
+            data={
+                "verification_id": "v-no-face",
+                "user_reference": "acct-no-face",
+                "enrol_on_success": "true",
+            },
             files={"live_selfie": ("s.jpg", _encode(noise), "image/jpeg")},
         )
-        assert response.status_code >= 400
-        assert response.json()["error"]["code"] == "FACE_NOT_DETECTED"
+        assert response.status_code == 200
+        body = response.json()
+        assert body["recommendation"] != "APPROVE"
+        assert (body.get("duplicate") or {}).get("gallery_size", 0) == 0
 
     def test_a_uniform_image_is_caught_before_the_detector(
         self, client: Any
@@ -392,9 +434,9 @@ class TestGallery:
         """
         blank = np.full((320, 320, 3), 200, dtype=np.uint8)
         response = client.post(
-            "/v1/duplicate/enrol",
+            "/v1/verify",
             headers={"X-API-Key": API_KEY},
-            data={"reference": "acct-blank"},
+            data={"verification_id": "v-blank"},
             files={"live_selfie": ("s.jpg", _encode(blank), "image/jpeg")},
         )
         assert response.status_code >= 400
@@ -451,7 +493,6 @@ class TestOpenApiSecurity:
         ("path", "method"),
         [
             ("/v1/verify", "post"),
-            ("/v1/duplicate/enrol", "post"),
             ("/v1/duplicate/{reference}", "delete"),
         ],
     )

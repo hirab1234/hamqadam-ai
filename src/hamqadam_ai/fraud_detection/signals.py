@@ -450,6 +450,13 @@ BENIGN_CODES: frozenset[str] = frozenset({
     "FRAUD_RISK_TOO_HIGH",
     "IDENTITY_CONFIDENCE_SUFFICIENT",
     "IDENTITY_CONFIDENCE_TOO_LOW",
+
+    # The decision engine's duplicate outcomes. The *evidence* is
+    # `DUPLICATE_FACE_DETECTED`, which is catalogued and scored; these two are
+    # what the engine concluded from it under `duplicate.on_duplicate`. Scoring
+    # them as well would count one duplicate twice.
+    "DUPLICATE_FACE_CONFIRMED",
+    "DUPLICATE_FACE_NEEDS_REVIEW",
     # `NO_IDENTITY_COMPARISON` deliberately absent: it is a *blocking* code,
     # passed straight to the decision engine rather than through the collector,
     # so it is never classified here. The reachability scanner does not see it

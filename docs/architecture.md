@@ -213,8 +213,7 @@ with `python scripts/export_openapi.py -o docs/openapi.json`.
 
 | endpoint | purpose | auth |
 |---|---|---|
-| `POST /v1/verify` | run a full verification | API key |
-| `POST /v1/duplicate/enrol` | add a face to the gallery | API key |
+| `POST /v1/verify` | verify, check the gallery, decide, enrol | API key |
 | `DELETE /v1/duplicate/{reference}` | erase a face from the gallery | API key |
 | `GET /health` | liveness | none |
 | `GET /ready` | readiness | none |

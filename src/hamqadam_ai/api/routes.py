@@ -12,6 +12,15 @@ format, dimension and decompression-bomb limits **before** anything is
 allocated at full resolution. That ordering matters: a decompression bomb is
 only a bomb if you decode it first.
 
+One call does everything
+------------------------
+``/v1/verify`` verifies, searches the duplicate gallery, decides, and enrols -
+in a single request. Enrolment used to be a separate ``POST
+/v1/duplicate/enrol``; that route is gone, because a Backend could verify
+without ever calling it, leaving every duplicate search to run against an empty
+gallery and find nothing. Enrolment is now governed by
+``duplicate.enrol_policy``.
+
 Erasure is a first-class route
 ------------------------------
 ``DELETE /v1/duplicate/{reference}`` exists because the service stores
@@ -25,7 +34,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Depends, File, Form, Request, Response, Security, UploadFile
+from fastapi import Depends, Request, Response, Security
 from fastapi.responses import PlainTextResponse
 
 from hamqadam_ai.api.security import (
@@ -77,11 +86,13 @@ VERIFY_FORM_SCHEMA: dict[str, Any] = {
             },
             "enrol_on_success": {
                 "type": "boolean",
-                "default": False,
                 "description": (
-                    "Add this face to the duplicate gallery if the result is "
-                    "APPROVE. Needs user_reference; without one there is no key "
-                    "to store against."
+                    "Optional override. Leave unset and the configured "
+                    "duplicate.enrol_policy decides - this endpoint verifies, "
+                    "checks the gallery and enrols in one call. Pass false to "
+                    "suppress enrolment for this submission. Needs "
+                    "user_reference; without one there is no key to store "
+                    "against. A REJECT is never enrolled."
                 ),
             },
             "live_selfie": _binary(
@@ -171,6 +182,15 @@ def register_routes(app: Any, state: dict[str, Any]) -> None:
     def _pipeline() -> Any:
         """The pipeline, or a typed error explaining why there is not one."""
         pipeline = state.get("pipeline")
+        if pipeline is None:
+            # A backend that was unreachable at startup may be back - Qdrant
+            # restarting under a running uvicorn is the usual way this happens.
+            # Retry rather than serve MODEL_NOT_LOADED until someone restarts
+            # the process. Imported here, not at module scope, because app.py
+            # imports this module while it is still being defined.
+            from hamqadam_ai.api.app import recover_state
+
+            pipeline = recover_state()
         if pipeline is None:
             raise HamqadamError(
                 state.get("ready_error")
@@ -276,9 +296,20 @@ def register_routes(app: Any, state: dict[str, Any]) -> None:
         user_reference = (
             None if raw_reference in {"", "string"} else raw_reference
         )
-        enrol_on_success = str(
-            form.get("enrol_on_success") or "false"
-        ).strip().lower() in {"true", "1", "yes", "on"}
+        # Absent must stay absent. Coercing a missing field to False made it an
+        # explicit "do not enrol" override, so `enrol_policy` was silently
+        # unreachable and the gallery never grew for any caller that simply did
+        # not send the field - which is every caller that does not know it
+        # exists.
+        raw_enrol = form.get("enrol_on_success")
+        enrol_override: bool | None = None
+        if raw_enrol is not None and str(raw_enrol).strip() != "":
+            enrol_override = str(raw_enrol).strip().lower() in {
+                "true",
+                "1",
+                "yes",
+                "on",
+            }
 
         images = VerificationImages(
             live_selfie=_decode(form.get("live_selfie"), "live_selfie"),
@@ -316,54 +347,23 @@ def register_routes(app: Any, state: dict[str, Any]) -> None:
                 VerificationRequest(
                     verification_id=verification_id,
                     user_reference=user_reference,
-                    enrol_on_success=enrol_on_success,
+                    enrol_on_success=enrol_override,
                 ),
                 images,
             )
         return result
 
     # -- Gallery --------------------------------------------------------------- #
-
-    @app.post(
-        "/v1/duplicate/enrol",
-        summary="Add a face to the duplicate gallery",
-        tags=["gallery"],
-    )
-    async def enrol(
-        _fingerprint: str = Depends(authorise_analyze),
-        reference: str = Form(...),
-        live_selfie: UploadFile = File(...),
-    ) -> dict[str, Any]:
-        """Store a face template against a reference.
-
-        Separate from ``/v1/verify`` on purpose. Enrolling as a side effect of
-        verifying would put a **rejected** applicant's face in the gallery,
-        where it would match their next legitimate attempt.
-        """
-        from hamqadam_ai.core.constants import ImageRole
-
-        pipeline = _pipeline()
-        services = pipeline._services  # noqa: SLF001 - same package, one owner
-
-        image = _decode(live_selfie, "live_selfie")
-        if image is None:
-            raise RequestValidationError("No image was supplied.")
-
-        detection = services["detection"].detect(image, role=ImageRole.LIVE_SELFIE)
-        if not detection.face_detected:
-            raise HamqadamError(
-                "No face was found in the supplied image, so there is nothing "
-                "to enrol.",
-                code=ErrorCode.FACE_NOT_DETECTED,
-            )
-
-        embedding = services["embedding"].embed_to_vector(
-            image, role=ImageRole.LIVE_SELFIE, detection=detection
-        )
-        enrolment = services["duplicate"].enrol(embedding, reference=reference)
-        _publish_gallery_size(services["duplicate"])
-        payload: dict[str, Any] = enrolment.model_dump(mode="json")
-        return payload
+    #
+    # Enrolment used to live here as POST /v1/duplicate/enrol. It is gone:
+    # /v1/verify now enrols under `duplicate.enrol_policy`, so one call
+    # verifies, searches the gallery and enrols. Keeping a second route
+    # meant a Backend could verify without ever populating the gallery -
+    # every duplicate search then ran against nothing and found nothing,
+    # silently.
+    #
+    # Erasure stays a route because only the Backend knows when a user has
+    # asked to be forgotten.
 
     @app.delete(
         "/v1/duplicate/{reference}",
@@ -385,6 +385,140 @@ def register_routes(app: Any, state: dict[str, Any]) -> None:
         removed = bool(duplicate.forget(reference))
         _publish_gallery_size(duplicate)
         return {"reference": reference, "removed": removed, "erased": True}
+
+    # -- Admin / inspection ---------------------------------------------------- #
+    #
+    # Development and testing only. Gated by `admin.enabled`, which the
+    # production hardening validator refuses to let be true, and behind the same
+    # API key as everything else.
+    #
+    # Three rules these obey:
+    #   * they never return a vector - a 512-float template is biometric data;
+    #   * they never enrol, so no route here can seed the gallery it inspects;
+    #   * the delete calls the same store method the compliance erasure route
+    #     uses, so testing it exercises the real path rather than a parallel one.
+
+    def _admin_store() -> Any:
+        """The gallery adapter, or a typed refusal explaining why not."""
+        if not _settings().admin.enabled:
+            raise HamqadamError(
+                "The admin routes are disabled. Set admin.enabled=true in a "
+                "development environment; production refuses them outright "
+                "because they enumerate the duplicate gallery.",
+                code=ErrorCode.FORBIDDEN,
+            )
+        pipeline = _pipeline()
+        return pipeline._services["duplicate"]  # noqa: SLF001 - same package
+
+    def _unsupported(exc: NotImplementedError) -> HamqadamError:
+        return HamqadamError(
+            f"The configured gallery adapter cannot do this: {exc}",
+            code=ErrorCode.DEPENDENCY_UNAVAILABLE,
+        )
+
+    @app.get(
+        "/admin/qdrant/count",
+        summary="How many templates the gallery holds (dev only)",
+        tags=["admin"],
+    )
+    async def admin_count(
+        _fingerprint: str = Depends(authorise_cheap),
+    ) -> dict[str, Any]:
+        """Gallery size and which adapter answered.
+
+        `store` is the field worth reading: if it says `memory` the gallery is
+        not durable, whatever the configuration claims.
+        """
+        service = _admin_store()
+        store = service._store  # noqa: SLF001
+        return {
+            "store": store.name,
+            "count": int(service.gallery_size()),
+            "collection": getattr(
+                _settings().duplicate.qdrant, "collection", None
+            ),
+        }
+
+    @app.get(
+        "/admin/qdrant/list",
+        summary="Enumerate stored references (dev only)",
+        tags=["admin"],
+    )
+    async def admin_list(
+        limit: int = 50,
+        offset: int = 0,
+        _fingerprint: str = Depends(authorise_cheap),
+    ) -> dict[str, Any]:
+        """List references, without vectors.
+
+        Bounded by `admin.max_list_limit`: a gallery can hold hundreds of
+        thousands of records, and an unbounded scan is both a memory problem and
+        a bulk-disclosure one.
+        """
+        settings = _settings()
+        service = _admin_store()
+        capped = max(1, min(limit, settings.admin.max_list_limit))
+        try:
+            records = service._store.list_references(  # noqa: SLF001
+                limit=capped, offset=max(0, offset)
+            )
+        except NotImplementedError as exc:
+            raise _unsupported(exc) from exc
+        return {
+            "store": service._store.name,  # noqa: SLF001
+            "count": int(service.gallery_size()),
+            "returned": len(records),
+            "limit": capped,
+            "offset": max(0, offset),
+            "records": records,
+        }
+
+    @app.get(
+        "/admin/qdrant/{reference}",
+        summary="Look up one reference (dev only)",
+        tags=["admin"],
+    )
+    async def admin_get(
+        reference: str,
+        _fingerprint: str = Depends(authorise_cheap),
+    ) -> dict[str, Any]:
+        """One record's metadata, without its vector."""
+        service = _admin_store()
+        try:
+            record = service._store.get(reference)  # noqa: SLF001
+        except NotImplementedError as exc:
+            raise _unsupported(exc) from exc
+        return {
+            "reference": reference,
+            "found": record is not None,
+            "record": record,
+        }
+
+    @app.delete(
+        "/admin/qdrant/{reference}",
+        summary="Erase one reference (dev only)",
+        tags=["admin"],
+    )
+    async def admin_delete(
+        reference: str,
+        _fingerprint: str = Depends(authorise_cheap),
+    ) -> dict[str, Any]:
+        """Erase a template.
+
+        Deliberately the same `forget` call as `DELETE /v1/duplicate/{reference}`
+        rather than a second deletion path. Testing this therefore tests the
+        route a real erasure request travels; a parallel implementation could
+        pass here and leave the compliance one broken.
+        """
+        service = _admin_store()
+        removed = bool(service.forget(reference))
+        _publish_gallery_size(service)
+        return {
+            "reference": reference,
+            "removed": removed,
+            "erased": True,
+            "count": int(service.gallery_size()),
+        }
 
     # -- Operational ----------------------------------------------------------- #
 

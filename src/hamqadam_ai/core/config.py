@@ -286,6 +286,32 @@ class SecurityConfig(BaseModel):
         return value
 
 
+class AdminConfig(BaseModel):
+    """Read-mostly inspection routes for development and testing.
+
+    Off by default and **refused in production** by the hardening validator.
+    These routes enumerate the duplicate gallery, which is a register of who has
+    been verified - useful while proving the store works, and not something to
+    leave reachable once it does.
+
+    They never return a vector. A 512-float template is biometric data; an
+    inspection route that hands it out is an exfiltration route with a debugging
+    excuse. Only the reference, model version and enrolment timestamp are
+    exposed.
+
+    They also never touch the verification pipeline: no route here can enrol,
+    and the delete goes through the same store method the compliance erasure
+    route uses.
+    """
+
+    enabled: bool = False
+
+    #: Ceiling on one page of `GET /admin/qdrant/list`. A gallery can hold
+    #: hundreds of thousands of records and an unbounded scan would be both a
+    #: memory problem and a bulk-disclosure one.
+    max_list_limit: int = Field(default=100, ge=1, le=1000)
+
+
 class StorageConfig(BaseModel):
     """Scratch storage policy. No user image is ever written durably."""
 
@@ -1213,6 +1239,20 @@ class IdentityAggregationConfig(BaseModel):
     )
     secondary_aggregation: Literal["mean", "max", "min"] = "mean"
     cnic_failure_cap: float = Field(default=45.0, ge=0.0, le=100.0)
+
+    #: Ceiling when the *profile* comparison is FAILED.
+    #:
+    #: Symmetric with `cnic_failure_cap`, which existed alone. A failing profile
+    #: comparison was merely averaged in at weight 0.35, so a strong CNIC could
+    #: outvote it: profile 3 with CNIC 95 fused to 54.75, and adding an
+    #: agreeing secondary lifted it to 62.8. Neither reached 75, so no approval
+    #: was observed from this path - but the margin was the arithmetic, not a
+    #: rule, and reweighting or a stronger CNIC would close it.
+    #:
+    #: A profile photograph that does not match the live selfie is a
+    #: contradiction in the submission, not a low score to be averaged away.
+    profile_failure_cap: float = Field(default=45.0, ge=0.0, le=100.0)
+
     min_comparisons: int = Field(default=1, ge=1)
 
     _REQUIRED = ("cnic", "profile", "secondary")
@@ -1557,8 +1597,22 @@ class CnicFaceConfig(BaseModel):
 class QdrantConfig(BaseModel):
     """Connection settings for the durable gallery."""
 
-    #: Endpoint. ``:memory:`` or a filesystem path use the client's embedded
-    #: engine instead of HTTP - useful for a single node and for tests.
+    #: Endpoint, in one of three forms:
+    #:
+    #: * ``http://localhost:6333`` - a Qdrant **server**. The default: a Docker
+    #:   container, reachable over HTTP. Inside compose the service name applies
+    #:   instead (``http://qdrant:6333``).
+    #: * ``./data/qdrant`` - the client's embedded engine, on local disk. Was the
+    #:   default and is no longer, because it takes an **exclusive lock** on its
+    #:   directory: a second API replica cannot open it, and a hard crash leaves
+    #:   the lock behind so the next start refuses. Both were observed.
+    #: * ``:memory:`` - embedded and ephemeral. Tests only.
+    #:
+    #: Kept identical to `configs/thresholds.yaml`. They disagreed briefly - the
+    #: YAML said `./data/qdrant` while this said `http://localhost:6333` - which
+    #: means anything constructing the model directly, or any deployment whose
+    #: YAML failed to load, would silently reach for an HTTP server that is not
+    #: there.
     url: str = "http://localhost:6333"
     collection: str = "hamqadam_faces"
     api_key: str | None = None
@@ -1581,7 +1635,17 @@ class DuplicateConfig(BaseModel):
 
     #: Which gallery adapter to use. ``memory`` is exact and fast and loses
     #: everything on restart; ``qdrant`` is durable and shared.
-    backend: Literal["memory", "qdrant"] = "memory"
+    backend: Literal["memory", "qdrant"] = "qdrant"
+
+    #: Whether an unreachable Qdrant may silently degrade to the in-process
+    #: store.
+    #:
+    #: False, deliberately. The fallback used to be unconditional, and it was
+    #: the wrong default: a misconfigured URL logged an error and the service
+    #: came up serving ``store: "memory"``, so duplicate detection reported
+    #: healthy while searching a gallery that emptied on every restart. Silent
+    #: loss of durability in a fraud control is worse than refusing to start.
+    allow_memory_fallback: bool = False
     qdrant: QdrantConfig = Field(default_factory=QdrantConfig)
     #: Ceiling on the in-process gallery. A guard against an unbounded leak,
     #: not a policy - evicting silently would silently stop detecting
@@ -1592,6 +1656,33 @@ class DuplicateConfig(BaseModel):
     review_threshold: float = Field(default=0.58, ge=-1.0, le=1.0)
     top_k: int = Field(default=10, ge=1, le=100)
     on_duplicate: Literal["manual_review", "reject"] = "manual_review"
+
+    #: Which outcomes enrol the live selfie into the duplicate gallery.
+    #:
+    #: This is the **authority** on enrolment. A single call to ``/v1/verify``
+    #: verifies, searches the gallery and enrols under this policy, so the
+    #: Backend never needs a second request. ``enrol_on_success`` on the request
+    #: is only a per-call override.
+    #:
+    #: ``never``
+    #:     Nothing is ever written. Use when the Backend manages the gallery
+    #:     itself, or while a retention basis is still being agreed.
+    #:
+    #: ``on_approve``
+    #:     Only an APPROVE writes to the gallery. Conservative, and the original
+    #:     behaviour - but it leaves a hole: an applicant sent to MANUAL_REVIEW
+    #:     is never enrolled, so when they open a second account there is
+    #:     nothing for it to collide with. The multi-account case the gallery
+    #:     exists to catch is exactly the case it misses.
+    #: ``unless_rejected``
+    #:     APPROVE or MANUAL_REVIEW enrol; REJECT does not. Closes that hole,
+    #:     at the cost of storing a template for someone not yet approved.
+    #:
+    #: Which is right is a data-protection decision, not an engineering one, so
+    #: the default does not change existing behaviour. Set
+    #: ``HQ_DUPLICATE__ENROL_POLICY=unless_rejected`` deliberately, and only if
+    #: the retention basis covers templates for unapproved applicants.
+    enrol_policy: Literal["never", "on_approve", "unless_rejected"] = "on_approve"
 
     @model_validator(mode="after")
     def _validate(self) -> DuplicateConfig:
@@ -1674,6 +1765,39 @@ class ApproveRule(BaseModel):
     min_identity_confidence: float = Field(default=75.0, ge=0, le=100)
     max_fraud_risk: float = Field(default=30.0, ge=0, le=100)
 
+    #: Stages that must have RUN and SUCCEEDED before an automatic approval is
+    #: possible. Any one of them missing forces MANUAL_REVIEW.
+    #:
+    #: This exists because of a demonstrated false approval. A submission
+    #: carried a profile photograph of a *different person*, and the profile
+    #: stage failed mid-request. Module 4 renormalises its identity weights over
+    #: the comparisons that actually produced a result, so the absent profile
+    #: comparison was dropped and the weights collapsed to ``{cnic: 1.0}``.
+    #: Identity confidence became the CNIC score alone - 95.0 - and
+    #: ``assessment_confidence`` was 5/6 = 0.83, over the 0.70 floor. Every
+    #: approve condition was satisfied and the service returned APPROVE.
+    #:
+    #: The wrong photograph was never compared, so it never counted against the
+    #: applicant. Renormalisation is right for evidence that was never
+    #: *requested* - a submission with no secondary images should not be
+    #: penalised - and wrong for evidence that was requested and did not
+    #: arrive. Scores alone cannot tell those apart; only the stage record can,
+    #: which is why the gate lives here and not in the score.
+    #:
+    #: `cnic_authenticity` is deliberately absent: it contributes a single
+    #: benign moiré observation, and Module 10 measured its other detectors as
+    #: not transferring to documents.
+    mandatory_stages: list[str] = Field(
+        default_factory=lambda: [
+            "selfie",
+            "profile",
+            "cnic_ocr",
+            "cnic_portrait",
+            "matching",
+            "duplicate",
+        ]
+    )
+
     #: How much of the intended evidence must actually have been gathered.
     #:
     #: Without this the engine approves on whatever ran. Measured on the
@@ -1726,6 +1850,7 @@ class Settings(BaseSettings):
     server: ServerConfig = Field(default_factory=ServerConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    admin: AdminConfig = Field(default_factory=AdminConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
@@ -1793,6 +1918,12 @@ class Settings(BaseSettings):
             problems.append("logging.redaction.enabled must be true in production")
         if not self.model_store.verify_checksum:
             problems.append("model_store.verify_checksum must be true in production")
+        if self.admin.enabled:
+            problems.append(
+                "admin.enabled must be false in production; the admin routes "
+                "enumerate the duplicate gallery, which is a register of who "
+                "has been verified"
+            )
 
         if problems:
             raise ConfigurationError(

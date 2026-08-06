@@ -123,6 +123,20 @@ BLOCKING_CONDITIONS: dict[str, str] = {
     "PIPELINE_INCOMPLETE": (
         "Not enough of the verification ran to support a recommendation."
     ),
+    "DUPLICATE_FACE_NEEDS_REVIEW": (
+        "This face is already enrolled in the gallery under a different "
+        "account reference, so a human must confirm whether the two are the "
+        "same person."
+    ),
+}
+
+#: Categorical adverse findings. Unlike a blocking condition these are *not* an
+#: absence of evidence - they are a definite negative, and they yield REJECT.
+REJECTING_CONDITIONS: dict[str, str] = {
+    "DUPLICATE_FACE_CONFIRMED": (
+        "This face is already enrolled in the gallery under a different account "
+        "reference, and policy is to refuse duplicates outright."
+    ),
 }
 
 
@@ -146,6 +160,7 @@ class DecisionEngine:
         fraud_level: RiskLevel,
         assessment_confidence: float = 1.0,
         blocking: list[str] | None = None,
+        rejecting: list[str] | None = None,
     ) -> DecisionOutcome:
         """Produce a recommendation.
 
@@ -161,10 +176,45 @@ class DecisionEngine:
                 gender mismatch does not become less true because the duplicate
                 gallery was down.
             blocking: Conditions that make a recommendation impossible.
+                These yield MANUAL_REVIEW - "the evidence to decide was never
+                produced" is not a judgement about the applicant.
+            rejecting: Categorical adverse findings, which yield REJECT
+                outright.
+
+                Separate from ``blocking`` because the two mean opposite things
+                and were briefly conflated here. A confirmed duplicate is not an
+                absence of evidence; it is evidence. Routing it through
+                ``blocking`` would have turned a deliberate
+                ``on_duplicate=reject`` policy into a manual review.
+
+                These also bypass the fraud arithmetic on purpose. A duplicate
+                does reach REJECT through the score - weight 0.70 aggregates to
+                about 70, over the 65 reject threshold - but only by
+                coincidence of tuning. Retune the weight, raise the threshold,
+                or let a family cap bite, and the same face on two accounts
+                starts being approved with no test failing.
 
         Returns:
             The outcome, with every condition evaluated and reported.
         """
+        refusals = list(rejecting or [])
+        if refusals:
+            return DecisionOutcome(
+                recommendation=Recommendation.REJECT,
+                reasons=[
+                    DecisionReason(
+                        code=code,
+                        message=REJECTING_CONDITIONS.get(
+                            code, "A categorical adverse finding was recorded."
+                        ),
+                        satisfied=True,
+                    )
+                    for code in refusals
+                ],
+                blocked_by=refusals[0],
+                automated=True,
+            )
+
         blockers = list(blocking or [])
         if identity_confidence is None and "NO_IDENTITY_COMPARISON" not in blockers:
             blockers.append("NO_IDENTITY_COMPARISON")

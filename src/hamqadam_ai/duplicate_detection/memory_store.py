@@ -302,6 +302,35 @@ class InMemoryVectorStore(VectorStore):
                 self._index[removed.model_version] = None
             return removed is not None
 
+    def list_references(
+        self, *, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """Enumerate references. Vectors are deliberately not returned."""
+        with self._lock:
+            records = sorted(self._records.values(), key=lambda r: r.reference)
+        return [
+            {
+                "reference": record.reference,
+                "model_version": record.model_version,
+                "enrolled_at": record.enrolled_at.isoformat(),
+                "dimension": len(record.vector),
+            }
+            for record in records[offset : offset + limit]
+        ]
+
+    def get(self, reference: str) -> dict[str, Any] | None:
+        """One record's metadata. Vectors are deliberately not returned."""
+        with self._lock:
+            record = self._records.get(reference)
+        if record is None:
+            return None
+        return {
+            "reference": record.reference,
+            "model_version": record.model_version,
+            "enrolled_at": record.enrolled_at.isoformat(),
+            "dimension": len(record.vector),
+        }
+
     def count(self, *, model_version: str | None = None) -> int:
         """How many templates are enrolled."""
         with self._lock:

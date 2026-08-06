@@ -1007,20 +1007,49 @@ profile:
 # decision, not this service's.
 duplicate:
   # Which gallery adapter to use.
+  #   qdrant - durable. The default, because the alternative loses data.
   #   memory - exact search over a materialised matrix. Fast (17 ms over
   #            100,000 templates) and correct, and LOST ON RESTART. Several
   #            replicas would each hold a different partial gallery, so whether
-  #            a duplicate was found would depend on which pod answered.
-  #   qdrant - durable and shared. Required for any multi-replica deployment.
-  backend: memory
+  #            a duplicate was found would depend on which pod answered - an
+  #            attacker only has to retry until they reach an empty one.
+  #
+  # Measured before this default changed: a face enrolled under one reference
+  # was found at cosine 1.0, the process was restarted, and the same face was
+  # then approved with gallery_size back to 0.
+  backend: qdrant
+
   qdrant:
-    # ":memory:" or a filesystem path use the client's embedded engine rather
-    # than HTTP, which is useful for a single node and for tests.
+    # Three forms, chosen by shape:
+    #
+    #   http://localhost:6333  a Qdrant SERVER - the default. Run it with
+    #                          Docker; inside compose the service name applies
+    #                          instead (http://qdrant:6333).
+    #   ./data/qdrant          the client's embedded engine, on local disk.
+    #   ":memory:"             embedded and ephemeral; tests only.
+    #
+    # The embedded engine was the default and is no longer. It works, and it has
+    # two properties that make it wrong for a deployment, both observed here:
+    # it takes an **exclusive lock** on its directory, so a second API replica
+    # cannot open it; and a hard crash leaves that lock behind, so the next
+    # start refuses rather than recovering.
+    #
+    # A server has neither problem, creates its collection on first connect, and
+    # persists to a Docker volume.
     url: http://localhost:6333
     collection: hamqadam_faces
     api_key: null
     timeout_seconds: 5.0
     create_collection: true
+
+  # Whether an unreachable Qdrant may silently degrade to the in-process store.
+  #
+  # False, deliberately. The fallback existed and it was the wrong default: a
+  # misconfigured URL logged an error and the service came up serving
+  # `store: "memory"`, so duplicate detection looked healthy while searching a
+  # gallery that emptied on every restart. Silent loss of durability in a fraud
+  # control is worse than a service that refuses to start.
+  allow_memory_fallback: false
 
   # Ceiling on the in-process gallery. A guard against an unbounded leak, not a
   # policy: evicting silently would silently stop detecting duplicates of

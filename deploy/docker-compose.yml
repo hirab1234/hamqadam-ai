@@ -25,6 +25,13 @@ x-ai-environment: &ai-environment
   #   python -c "from hamqadam_ai.core.config import Settings; print(list(Settings.model_fields))"
   HQ_DUPLICATE__BACKEND: qdrant
   HQ_DUPLICATE__QDRANT__URL: http://qdrant:6333
+  HQ_DUPLICATE__QDRANT__COLLECTION: hamqadam_faces
+  # on_approve | unless_rejected. See configs/app.production.yaml - the
+  # second also enrols reviewed applicants, which closes the multi-account
+  # hole but stores a template for someone not yet approved.
+  HQ_DUPLICATE__ENROL_POLICY: ${HQ_ENROL_POLICY:-on_approve}
+  # manual_review | reject
+  HQ_DUPLICATE__ON_DUPLICATE: ${HQ_ON_DUPLICATE:-manual_review}
   HQ_EMBEDDING__CACHE__BACKEND: redis
   # Read directly from the environment by the cache adapter rather than through
   # the settings tree, which is why it has no HQ_EMBEDDING__ prefix.
@@ -41,6 +48,32 @@ x-ai-environment: &ai-environment
   HQ_SECURITY__REQUIRE_API_KEY: "true"
 
 services:
+  # Populates the shared `models` volume before anything that needs weights
+  # starts. Runs once and exits.
+  #
+  # Without this the stack comes up broken on a fresh host, and it does so
+  # *quietly*: `docker compose up` reported api "healthy" because /health is a
+  # liveness probe, while /ready returned 503 and the worker crash-looped on
+  # ModelNotLoadedError. The volume was simply empty - nothing in the stack ever
+  # downloaded the weights, and the Dockerfile deliberately does not bake them
+  # in (several hundred megabytes in every layer makes each deploy slow and
+  # every rollback expensive).
+  #
+  # `service_completed_successfully` on the dependents is what makes this a
+  # gate rather than a race: api and worker do not start until this has exited 0.
+  model-init:
+    image: hamqadam/ai-verification:latest
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: "no"
+    command: ["python", "scripts/download_models.py"]
+    environment: *ai-environment
+    volumes:
+      - models:/models
+    security_opt:
+      - no-new-privileges:true
+
   api:
     build:
       context: ..
@@ -58,7 +91,14 @@ services:
       # created it, which is exactly what the retention policy forbids.
       - /tmp/hamqadam:size=512m,mode=1700
     depends_on:
-      qdrant: {condition: service_started}
+      # Weights first, or the API starts, reports /health 200, and serves 503 on
+      # /ready forever.
+      model-init: {condition: service_completed_successfully}
+      # service_healthy now that Qdrant is the mandatory store. It used to be
+      # service_started, which was right while the gallery was optional and is
+      # wrong now: `allow_memory_fallback` is false, so an API that starts
+      # before Qdrant answers does not degrade - it refuses to start at all.
+      qdrant: {condition: service_healthy}
       redis: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8000/health"]
@@ -82,7 +122,20 @@ services:
       - models:/models
     tmpfs:
       - /tmp/hamqadam:size=512m,mode=1700
+    # The worker serves no HTTP, so it cannot answer the image's healthcheck -
+    # which curls http://localhost:8000/health and belongs to the API. Inherited
+    # unchanged it marked both replicas `(unhealthy)` forever while they were
+    # consuming happily, and under an orchestrator that acts on health it would
+    # be a restart loop around a working process.
+    #
+    # Disabled rather than replaced with something cosmetic. Liveness here is
+    # real: the consumer exits non-zero when it cannot build its pipeline or
+    # reach the broker - which is exactly what it did when the models volume was
+    # empty - and `restart: unless-stopped` handles that.
+    healthcheck:
+      disable: true
     depends_on:
+      model-init: {condition: service_completed_successfully}
       api: {condition: service_healthy}
       rabbitmq: {condition: service_healthy}
     deploy:
@@ -98,12 +151,30 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.12.4
     restart: unless-stopped
+    environment:
+      # Structured logs so the container's output is greppable alongside the
+      # API's own JSON.
+      QDRANT__LOG_LEVEL: INFO
+      QDRANT__SERVICE__HTTP_PORT: 6333
     volumes:
+      # The named volume is what makes the gallery survive `docker compose down`
+      # and a VPS reboot. Remove it and every enrolled template is gone - which
+      # is precisely the in-memory failure this backend exists to avoid.
       - qdrant:/qdrant/storage
     # No published port. The gallery holds biometric templates; it is reachable
     # from the compose network and nowhere else.
     expose:
       - "6333"
+    healthcheck:
+      # The image carries no curl and no wget, so the probe uses bash's own
+      # /dev/tcp redirection - available because the image is Debian-based.
+      # Checking the port answers is enough: the API creates its collection on
+      # connect, so "listening" is the readiness condition that matters.
+      test: ["CMD-SHELL", "bash -c '>/dev/tcp/127.0.0.1/6333' 2>/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
     security_opt:
       - no-new-privileges:true
 

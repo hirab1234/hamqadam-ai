@@ -85,13 +85,34 @@ def build_store(config: object, *, dimension: int) -> VectorStore:
                 create_collection=config.qdrant.create_collection,  # type: ignore[attr-defined]
             )
         except (DependencyUnavailableError, VectorStoreError) as exc:
+            if not getattr(config, "allow_memory_fallback", False):
+                # Refuse rather than downgrade. The fallback used to be
+                # unconditional, and it hid the one failure that matters: a
+                # misconfigured URL logged an error, the service started, and
+                # every response said `store: "memory"` - duplicate detection
+                # reporting healthy while searching a gallery that emptied on
+                # each restart. An operator reading "200 OK" has no way to see
+                # that. Failing to start is loud, and recoverable in a minute.
+                log.error(
+                    "duplicate.qdrant_unreachable",
+                    reason=str(exc),
+                    note=(
+                        "refusing to fall back to an in-process gallery, which "
+                        "would silently lose every template on restart. Fix "
+                        "duplicate.qdrant.url, or set "
+                        "duplicate.allow_memory_fallback=true to accept a "
+                        "non-durable gallery deliberately"
+                    ),
+                )
+                raise
             log.error(
                 "duplicate.qdrant_unavailable",
                 reason=str(exc),
                 note=(
-                    "falling back to an in-process gallery: it is lost on "
-                    "restart and not shared between replicas, so duplicates "
-                    "will be missed in any deployment running more than one"
+                    "falling back to an in-process gallery *because "
+                    "allow_memory_fallback is on*: it is lost on restart and "
+                    "not shared between replicas, so duplicates will be missed "
+                    "in any deployment running more than one"
                 ),
             )
 

@@ -102,6 +102,16 @@ COPY --chown=hamqadam:hamqadam src/ src/
 COPY --chown=hamqadam:hamqadam configs/ configs/
 COPY --chown=hamqadam:hamqadam pyproject.toml README.md ./
 
+# Operational scripts. `download_models.py` is the one that matters: the compose
+# stack runs it as a one-shot `model-init` service to populate the shared
+# `models` volume, and without it here that service dies with
+# "can't open file '/app/scripts/download_models.py'" - after which api and
+# worker never start, because they gate on it completing.
+#
+# Copied after the dependency layers so editing a script does not invalidate the
+# pip cache and force a rebuild of PyTorch.
+COPY --chown=hamqadam:hamqadam scripts/ scripts/
+
 # Model weights live on a mounted volume, not in the image. Several hundred
 # megabytes of ONNX baked into every layer would make each deploy slow and
 # every rollback expensive, and the weights change on a different cadence from

@@ -261,3 +261,78 @@ class TestEnvExample:
                 assert not value or "replace" in value.lower(), (
                     f"a real-looking API key is committed in .env.example: {value}"
                 )
+
+
+class TestConfigSourcesAgree:
+    """The same setting must not have different values in different files.
+
+    Three sources declare the gallery: the Pydantic defaults,
+    `configs/thresholds.yaml`, and `.env.example`. Nothing checked they matched,
+    and twice they did not:
+
+    * the URL - YAML `./data/qdrant` vs code `http://localhost:6333`
+    * the collection - `.env.example` `hamqadam_face_embeddings` vs
+      `hamqadam_faces` everywhere else
+
+    Neither is a crash. Both are worse than a crash: point a deployment at a
+    different collection and the gallery *appears empty*, so duplicate detection
+    silently finds nothing while reporting `store: "qdrant"` and looking healthy.
+    """
+
+    @staticmethod
+    def _env_example() -> dict[str, str]:
+        pairs: dict[str, str] = {}
+        for line in ENV_EXAMPLE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("HQ_") and "=" in line:
+                key, value = line.split("=", 1)
+                pairs[key.strip()] = value.strip()
+        return pairs
+
+    @staticmethod
+    def _yaml_duplicate() -> dict[str, Any]:
+        text = (REPO_ROOT / "configs" / "thresholds.yaml").read_text(
+            encoding="utf-8"
+        )
+        section: dict[str, Any] = yaml.safe_load(text)["duplicate"]
+        return section
+
+    def test_the_collection_name_is_identical_everywhere(self) -> None:
+        from hamqadam_ai.core.config import DuplicateConfig
+
+        names = {
+            DuplicateConfig().qdrant.collection,
+            self._yaml_duplicate()["qdrant"]["collection"],
+            self._env_example()["HQ_DUPLICATE__QDRANT__COLLECTION"],
+        }
+        assert len(names) == 1, (
+            f"the gallery collection is named inconsistently across config "
+            f"sources: {sorted(names)}. A deployment picking the wrong one sees "
+            f"an empty gallery and reports no duplicates."
+        )
+
+    def test_the_backend_is_identical_everywhere(self) -> None:
+        from hamqadam_ai.core.config import DuplicateConfig
+
+        backends = {
+            DuplicateConfig().backend,
+            self._yaml_duplicate()["backend"],
+            self._env_example()["HQ_DUPLICATE__BACKEND"],
+        }
+        assert backends == {"qdrant"}, (
+            f"the duplicate backend disagrees across config sources: "
+            f"{sorted(backends)}"
+        )
+
+    def test_the_qdrant_url_default_is_identical(self) -> None:
+        """Code and YAML only. `.env.example` may legitimately differ.
+
+        A template can suggest the server form for a multi-replica deployment
+        while the built-in default stays the single-node on-disk path.
+        """
+        from hamqadam_ai.core.config import DuplicateConfig
+
+        assert (
+            DuplicateConfig().qdrant.url
+            == self._yaml_duplicate()["qdrant"]["url"]
+        )

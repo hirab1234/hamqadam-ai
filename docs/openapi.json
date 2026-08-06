@@ -12,17 +12,57 @@
           "verification"
         ],
         "summary": "Run a full identity verification",
-        "description": "Analyse one submission and return a recommendation.\n\nEvery image is optional at the transport layer, deliberately. A missing\none is a finding the pipeline reports rather than a request the API\nrefuses - the Backend usually still wants the analysis of whatever did\narrive.",
+        "description": "Analyse one submission and return a recommendation.\n\nEvery image is optional at the transport layer, deliberately. A missing\none is a finding the pipeline reports rather than a request the API\nrefuses - the Backend usually still wants the analysis of whatever did\narrive.\n\nNote:\n    The multipart body is parsed here rather than declared as `Form`/\n    `File` parameters, and the schema Swagger renders comes from\n    ``openapi_extra`` above. Two problems forced that, and neither is\n    solvable with plain parameter annotations:\n\n    1. Swagger's \"Send empty value\" checkbox, ticked by default on\n       optional file fields, posts an empty **string** for a field the\n       user left blank. Declared as ``UploadFile | None`` FastAPI\n       refuses the whole request with \"Expected UploadFile, received:\n       <class 'str'>\" - so the documentation page could not submit its\n       own form.\n    2. Widening the annotation to ``UploadFile | str`` fixed that and\n       broke something worse: Swagger renders a union as a *text box*,\n       so `secondary_images` became ``array<(string | string)>`` with no\n       file picker at all. The upload UI was traded for the ability to\n       submit.\n\n    Parsing the form directly gives both: the schema below declares\n    honest ``format: binary`` fields, so Swagger shows real file\n    pickers and a repeatable selector for `secondary_images`, while the\n    parser treats an empty part exactly as an absent one.",
         "operationId": "verify_v1_verify_post",
         "requestBody": {
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/Body_verify_v1_verify_post"
+                "properties": {
+                  "verification_id": {
+                    "type": "string",
+                    "description": "Your identifier for this attempt. Echoed back and used as the log correlation id.",
+                    "example": "ver_01HQ8XZ"
+                  },
+                  "user_reference": {
+                    "type": "string",
+                    "description": "Your account identifier. Pseudonymised before it reaches a log and never echoed in the response. Also the key the duplicate gallery stores against."
+                  },
+                  "enrol_on_success": {
+                    "type": "boolean",
+                    "description": "Optional override. Leave unset and the configured duplicate.enrol_policy decides - this endpoint verifies, checks the gallery and enrols in one call. Pass false to suppress enrolment for this submission. Needs user_reference; without one there is no key to store against. A REJECT is never enrolled."
+                  },
+                  "live_selfie": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The biometric reference for the whole decision."
+                  },
+                  "profile_image": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The account's main photograph."
+                  },
+                  "cnic_image": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Front of the CNIC."
+                  },
+                  "secondary_images": {
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    },
+                    "type": "array",
+                    "description": "Additional photographs of the same person."
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "verification_id"
+                ]
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -31,65 +71,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VerificationResult"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKeyAuth": []
-          }
-        ]
-      }
-    },
-    "/v1/duplicate/enrol": {
-      "post": {
-        "tags": [
-          "gallery"
-        ],
-        "summary": "Add a face to the duplicate gallery",
-        "description": "Store a face template against a reference.\n\nSeparate from ``/v1/verify`` on purpose. Enrolling as a side effect of\nverifying would put a **rejected** applicant's face in the gallery,\nwhere it would match their next legitimate attempt.",
-        "operationId": "enrol_v1_duplicate_enrol_post",
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_enrol_v1_duplicate_enrol_post"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Enrol V1 Duplicate Enrol Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -135,6 +116,194 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Forget V1 Duplicate  Reference  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/qdrant/count": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "How many templates the gallery holds (dev only)",
+        "description": "Gallery size and which adapter answered.\n\n`store` is the field worth reading: if it says `memory` the gallery is\nnot durable, whatever the configuration claims.",
+        "operationId": "admin_count_admin_qdrant_count_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Admin Count Admin Qdrant Count Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/qdrant/list": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Enumerate stored references (dev only)",
+        "description": "List references, without vectors.\n\nBounded by `admin.max_list_limit`: a gallery can hold hundreds of\nthousands of records, and an unbounded scan is both a memory problem and\na bulk-disclosure one.",
+        "operationId": "admin_list_admin_qdrant_list_get",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Admin List Admin Qdrant List Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/qdrant/{reference}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Look up one reference (dev only)",
+        "description": "One record's metadata, without its vector.",
+        "operationId": "admin_get_admin_qdrant__reference__get",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reference",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Reference"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Admin Get Admin Qdrant  Reference  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Erase one reference (dev only)",
+        "description": "Erase a template.\n\nDeliberately the same `forget` call as `DELETE /v1/duplicate/{reference}`\nrather than a second deletion path. Testing this therefore tests the\nroute a real erasure request travels; a parallel implementation could\npass here and leave the compliance one broken.",
+        "operationId": "admin_delete_admin_qdrant__reference__delete",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reference",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Reference"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Admin Delete Admin Qdrant  Reference  Delete"
                 }
               }
             }
@@ -357,114 +526,6 @@
         ],
         "title": "AuthenticitySignalModel",
         "description": "One detector's reading, with the evidence behind it."
-      },
-      "Body_enrol_v1_duplicate_enrol_post": {
-        "properties": {
-          "reference": {
-            "type": "string",
-            "title": "Reference"
-          },
-          "live_selfie": {
-            "type": "string",
-            "format": "binary",
-            "title": "Live Selfie"
-          }
-        },
-        "type": "object",
-        "required": [
-          "reference",
-          "live_selfie"
-        ],
-        "title": "Body_enrol_v1_duplicate_enrol_post"
-      },
-      "Body_verify_v1_verify_post": {
-        "properties": {
-          "verification_id": {
-            "type": "string",
-            "title": "Verification Id"
-          },
-          "user_reference": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "User Reference"
-          },
-          "enrol_on_success": {
-            "type": "boolean",
-            "title": "Enrol On Success",
-            "default": false
-          },
-          "live_selfie": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "binary"
-              },
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Live Selfie"
-          },
-          "profile_image": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "binary"
-              },
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Profile Image"
-          },
-          "cnic_image": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "binary"
-              },
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cnic Image"
-          },
-          "secondary_images": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "binary"
-                },
-                {
-                  "type": "string"
-                }
-              ]
-            },
-            "type": "array",
-            "title": "Secondary Images"
-          }
-        },
-        "type": "object",
-        "required": [
-          "verification_id"
-        ],
-        "title": "Body_verify_v1_verify_post"
       },
       "BoundingBoxModel": {
         "properties": {
