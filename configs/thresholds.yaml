@@ -615,10 +615,32 @@ matching:
     # signal without it dominating the identity score.
     secondary_aggregation: mean
 
+    # Three caps, one per comparison type. Any FAILED comparison is a
+    # contradiction inside the submission, so it limits the fused score instead
+    # of being averaged against the comparisons that did match.
+    #
+    # They exist because averaging alone left the 75 approval threshold enforced
+    # by arithmetic rather than by rule. Each was added after the previous one
+    # showed the pattern: a mismatching image outvoted by the others, blocked
+    # only by however the remaining scores happened to land.
+
     # A failed CNIC comparison caps identity confidence however well the
     # profile images match each other. Two selfies of the same person agreeing
     # is not evidence of identity when the document says somebody else.
     cnic_failure_cap: 45.0
+
+    # A profile photograph of a different person contradicts the submission.
+    # Measured before this cap: profile 3 with CNIC 95 fused to 54.75.
+    profile_failure_cap: 45.0
+
+    # Secondary images are declared to be more photographs of the same person,
+    # so one showing somebody else contradicts the submission too. It carries
+    # the smallest weight (0.20), which is exactly why it needed a cap: measured
+    # at profile 100 with CNIC 87.34 a stranger's secondary fused to 74.30 and
+    # blocked approval by 0.7 of a point, while a CNIC of 89 crossed 75 and
+    # approved. Low-quality secondaries are not affected - those are marked
+    # low-confidence and down-weighted, never FAILED.
+    secondary_failure_cap: 45.0
 
     # Identity confidence needs at least this many usable comparisons to mean
     # anything. Below it the score is reported as unavailable rather than

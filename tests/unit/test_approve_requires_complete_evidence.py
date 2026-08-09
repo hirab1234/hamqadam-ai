@@ -116,6 +116,11 @@ class TestTheReportedBug:
             matching=type("M", (), {"identity_available": True})(),
             duplicate=None,
             stages=stages,
+            # These cases isolate the stage-record rule. The separate
+            # "supplied but uncomparable" rule is covered in
+            # test_uncomparable_supplied_image.py; empty here keeps this file
+            # measuring one thing.
+            uncomparable=[],
         )
         assert "MANDATORY_STAGE_INCOMPLETE" in blocking
 
@@ -227,6 +232,11 @@ class TestFailureModesFromTheBriefing:
             matching=type("M", (), {"identity_available": True})(),
             duplicate=None,
             stages=stages,
+            # These cases isolate the stage-record rule. The separate
+            # "supplied but uncomparable" rule is covered in
+            # test_uncomparable_supplied_image.py; empty here keeps this file
+            # measuring one thing.
+            uncomparable=[],
         )
         outcome = DecisionEngine(settings.decision).decide(
             identity_confidence=99.0,

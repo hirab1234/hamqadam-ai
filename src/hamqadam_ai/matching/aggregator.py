@@ -247,6 +247,28 @@ class IdentityAggregator:
                 confidence = cap
                 capped_by = "cnic_failure"
 
+        # And a failing secondary caps too, completing the set. Averaging it at
+        # weight 0.20 meant a stranger among the secondary images was outvoted
+        # by the other two: profile 100 with CNIC 87.34 fused to 74.30, which
+        # blocked the approval by 0.7 of a point rather than by any rule. A CNIC
+        # scoring 89 crosses 75 and approves a submission containing somebody
+        # else's photograph.
+        if any(
+            outcome.compared and outcome.decision is MatchDecision.FAILED
+            for outcome in secondaries
+        ):
+            cap = identity.secondary_failure_cap
+            if confidence > cap:
+                reasons.append(
+                    f"At least one secondary photograph does not match the live "
+                    f"selfie, so identity confidence was capped at {cap:.0f}. "
+                    f"Secondary images are further photographs of the same "
+                    f"person; one showing somebody else contradicts the "
+                    f"submission rather than averaging against it."
+                )
+                confidence = cap
+                capped_by = capped_by or "secondary_failure"
+
         for outcome in outcomes:
             if outcome.compared and outcome.low_confidence:
                 if outcome.comparison is not ComparisonType.SECONDARY:

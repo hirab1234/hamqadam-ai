@@ -1253,6 +1253,24 @@ class IdentityAggregationConfig(BaseModel):
     #: contradiction in the submission, not a low score to be averaged away.
     profile_failure_cap: float = Field(default=45.0, ge=0.0, le=100.0)
 
+    #: Ceiling when *any* secondary comparison is FAILED.
+    #:
+    #: The third and last of the three, added for the reason the note above
+    #: predicted. A stranger's photograph among the secondary images was only
+    #: averaged in at weight 0.20, so whether it blocked an approval depended on
+    #: the other two scores: measured at profile 100 with CNIC 87.34 it fused to
+    #: 74.30 and held - by 0.7 of a point - while the same submission with a
+    #: CNIC scoring 89 or better crosses 75 and approves. The threshold was
+    #: being enforced by arithmetic, and the arithmetic ran out.
+    #:
+    #: Secondary images are declared to be more photographs *of the same
+    #: person*. One that matches somebody else is a contradiction in the
+    #: submission - the module docstring already calls it a fraud signal - so it
+    #: caps rather than dilutes. Low quality does not trigger this: a weak
+    #: embedding is marked low-confidence and down-weighted instead, and only a
+    #: comparison the matcher decided is FAILED reaches here.
+    secondary_failure_cap: float = Field(default=45.0, ge=0.0, le=100.0)
+
     min_comparisons: int = Field(default=1, ge=1)
 
     _REQUIRED = ("cnic", "profile", "secondary")
@@ -1797,6 +1815,23 @@ class ApproveRule(BaseModel):
             "duplicate",
         ]
     )
+
+    #: Whether the live selfie must pass its own checks before an automatic
+    #: approval is possible.
+    #:
+    #: The selfie is the reference every other comparison is measured against,
+    #: so its defects propagate into scores that look like identity evidence.
+    #: Observed: a selfie at pitch -71 degrees, reported `passed: false` with
+    #: FACE_POSE_OUT_OF_RANGE and a pose sub-score of 0, was embedded and
+    #: compared anyway. The CNIC similarity that came back was 0.489 against a
+    #: 0.42 threshold - scored STRONG_MATCH, and the whole approval rested on
+    #: it. A frontal selfie of the same person scores above 0.70.
+    #:
+    #: This disqualifies *approval* only. It is deliberately not a blocking
+    #: condition: a bad selfie means "we cannot confirm this automatically", not
+    #: "we cannot conclude anything", and a submission that also trips a
+    #: rejection rule should still be rejected rather than queued for a human.
+    require_usable_selfie: bool = True
 
     #: How much of the intended evidence must actually have been gathered.
     #:

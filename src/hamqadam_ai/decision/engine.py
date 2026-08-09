@@ -128,6 +128,30 @@ BLOCKING_CONDITIONS: dict[str, str] = {
         "account reference, so a human must confirm whether the two are the "
         "same person."
     ),
+    "MANDATORY_STAGE_INCOMPLETE": (
+        "A check that must run before an automatic approval did not complete, "
+        "so part of the evidence is missing rather than negative."
+    ),
+    "SUPPLIED_IMAGE_NOT_COMPARED": (
+        "A photograph was submitted that no face could be read from, so it was "
+        "never compared against the live selfie. An image the applicant "
+        "supplied and the service could not use is missing evidence, not "
+        "evidence in their favour."
+    ),
+}
+
+#: Conditions that disqualify an automatic *approval* without claiming the
+#: evidence is absent. Weaker than a blocking condition and stronger than a
+#: warning: the comparison happened, and it rested on something too degraded to
+#: approve on. Evaluated after the rejection rules, so they never convert a
+#: rejection into a manual review.
+APPROVAL_BLOCKERS: dict[str, str] = {
+    "SELFIE_NOT_USABLE": (
+        "The live selfie did not pass its own checks, and every comparison is "
+        "measured against it. A pose or quality defect in the reference image "
+        "lowers each similarity score, so a pass on that basis would not be "
+        "evidence of identity. Ask for a clear, front-facing photograph."
+    ),
 }
 
 #: Categorical adverse findings. Unlike a blocking condition these are *not* an
@@ -161,6 +185,7 @@ class DecisionEngine:
         assessment_confidence: float = 1.0,
         blocking: list[str] | None = None,
         rejecting: list[str] | None = None,
+        approval_blockers: list[str] | None = None,
     ) -> DecisionOutcome:
         """Produce a recommendation.
 
@@ -276,6 +301,33 @@ class DecisionEngine:
             return DecisionOutcome(
                 recommendation=Recommendation.REJECT,
                 reasons=[r for r in reject_reasons if r.satisfied],
+                automated=True,
+            )
+
+        # Evaluated here, deliberately: after rejection and before approval.
+        #
+        # These are not blocking conditions. A blocking condition says the
+        # evidence is absent, so no recommendation is possible and the answer is
+        # MANUAL_REVIEW whatever else was found - which would turn a clear
+        # rejection into a queue entry. These say something weaker and more
+        # specific: the evidence exists but is too degraded to *approve* on.
+        # A submission that also trips a rejection rule has already returned
+        # above, so a bad selfie never rescues an impostor.
+        disqualified = list(approval_blockers or [])
+        if disqualified:
+            return DecisionOutcome(
+                recommendation=Recommendation.MANUAL_REVIEW,
+                reasons=[
+                    DecisionReason(
+                        code=code,
+                        message=APPROVAL_BLOCKERS.get(
+                            code, "The evidence is too degraded to approve on."
+                        ),
+                        satisfied=False,
+                    )
+                    for code in disqualified
+                ],
+                blocked_by=disqualified[0],
                 automated=True,
             )
 

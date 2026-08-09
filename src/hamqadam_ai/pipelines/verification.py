@@ -266,9 +266,14 @@ class VerificationPipeline:
             fraud_level=fraud.fraud_risk_level if fraud else RiskLevel.LOW,
             assessment_confidence=fraud.assessment_confidence if fraud else 0.0,
             blocking=self._blocking_conditions(
-                selfie, matching, duplicate, stages
+                selfie,
+                matching,
+                duplicate,
+                stages,
+                self._uncomparable_supplied_images(images, profile, secondaries),
             ),
             rejecting=self._rejecting_conditions(duplicate),
+            approval_blockers=self._approval_blockers(selfie),
         )
 
         if cnic_authenticity is not None and cnic_authenticity.triggered:
@@ -686,6 +691,7 @@ class VerificationPipeline:
         matching: Any,
         duplicate: Any,
         stages: dict[str, _Stage],
+        uncomparable: list[str],
     ) -> list[str]:
         """Conditions that make a recommendation impossible rather than negative.
 
@@ -742,7 +748,102 @@ class VerificationPipeline:
                 note="approval is impossible; routed to manual review",
             )
             blocking.append("MANDATORY_STAGE_INCOMPLETE")
+
+        # A stage can succeed and still produce nothing to compare against.
+        #
+        # The check above reads the stage record, which tracks *execution*: did
+        # the code run, did it raise. It cannot see that a stage ran perfectly
+        # and concluded "there is no face in this photograph" - that is a
+        # successful analysis. Observed: a profile image of a different person
+        # at 185x272, too small for the detector. The profile stage recorded
+        # ran=true, succeeded=true; the comparison came back NOT_COMPARED;
+        # Module 4 renormalised the weights onto `{cnic: 1.0}`; identity
+        # confidence became the CNIC score alone, 77.98; and the answer was
+        # APPROVE. The wrong photograph was never compared, so it never counted
+        # against the applicant.
+        #
+        # This is the same hole the stage check was written to close, entered
+        # through a door that check cannot see. It also makes the failure caps
+        # in Module 4 bypassable: a mismatching face caps identity at 45, but
+        # the same face shrunk below the detector's reach costs nothing at all.
+        # Degrading an image must never be more effective than submitting an
+        # honest one.
+        #
+        # Supplied and uncomparable is therefore not the same as not supplied.
+        # Absence is already handled above - `_run` records ran=false when no
+        # image arrives. This is evidence the applicant *did* submit and the
+        # service could not read, which is a question for a human rather than
+        # grounds for an automatic approval.
+        if uncomparable:
+            log.warning(
+                "verification.supplied_image_not_compared",
+                images=uncomparable,
+                note="approval is impossible; routed to manual review",
+            )
+            blocking.append("SUPPLIED_IMAGE_NOT_COMPARED")
         return blocking
+
+    def _approval_blockers(self, selfie: dict[str, Any] | None) -> list[str]:
+        """Conditions that rule out an automatic approval without ruling out a
+        rejection.
+
+        Only the live selfie qualifies today, and it qualifies because of what
+        it is: the single reference every other comparison is measured against.
+        A defect there does not stay in its own stage, it lowers every
+        similarity score in the response, and those scores are what the approval
+        thresholds read.
+
+        Observed: pitch -71 degrees, `passed: false`, FACE_POSE_OUT_OF_RANGE,
+        pose sub-score 0. It was embedded and compared regardless, and the CNIC
+        similarity came back at 0.489 against a 0.42 threshold - reported
+        STRONG_MATCH, and the sole support for an APPROVE. The same person
+        photographed frontally scores above 0.70. The margin was the pose, not
+        the identity.
+
+        Returning this rather than raising keeps the comparison in the response.
+        The Backend still sees every score; it is told they are not fit to
+        approve on.
+        """
+        if not self._settings.decision.approve.require_usable_selfie:
+            return []
+        if selfie is None:
+            # Absence is a blocking condition, handled separately. Reporting it
+            # here too would put the same submission in two categories.
+            return []
+
+        detection = selfie.get("result")
+        quality = selfie.get("quality")
+        if detection is not None and getattr(detection, "passed", True) is False:
+            return ["SELFIE_NOT_USABLE"]
+        if quality is not None and getattr(quality, "usable", True) is False:
+            return ["SELFIE_NOT_USABLE"]
+        return []
+
+    def _uncomparable_supplied_images(
+        self,
+        images: VerificationImages,
+        profile: Any,
+        secondaries: list[Any],
+    ) -> list[str]:
+        """Images the caller supplied that yielded no comparable template.
+
+        Keyed off the *request*, not the result: the question is whether the
+        applicant submitted a photograph the service then failed to use, and
+        only the request knows what was submitted.
+        """
+        missing: list[str] = []
+
+        if images.profile is not None and (
+            profile is None or profile.embedding is None
+        ):
+            missing.append("profile")
+
+        for index, image in enumerate(images.secondaries):
+            entry = secondaries[index] if index < len(secondaries) else None
+            if image is not None and (entry is None or entry.embedding is None):
+                missing.append(f"secondary[{index}]")
+
+        return missing
 
     def _incomplete_mandatory_stages(
         self, stages: dict[str, _Stage]
