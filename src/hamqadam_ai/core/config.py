@@ -209,6 +209,19 @@ class ServerConfig(BaseModel):
     root_path: str = ""
     request_timeout_seconds: float = Field(default=45.0, gt=0, le=600)
     max_request_bytes: int = Field(default=40 * 1024 * 1024, gt=0)
+
+    #: Serve `docs/api-reference.md` at /api-docs and /api-docs.md.
+    #:
+    #: On in production too, unlike Swagger. /docs is an interactive console
+    #: with an Authorize box that persists a key in browser storage; this is
+    #: static text with no credential and no way to call anything. The Backend
+    #: team needs a URL that works against the deployment they are integrating
+    #: with, and a reference that is only readable on a laptop is a reference
+    #: nobody reads.
+    #:
+    #: Set `server.api_docs_enabled: false` if the service is reachable from
+    #: somewhere the API surface should not be described.
+    api_docs_enabled: bool = True
     cors: CorsConfig = Field(default_factory=CorsConfig)
 
 

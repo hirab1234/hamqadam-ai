@@ -30,6 +30,13 @@ onnxruntime==1.20.1
 # along: `"engine": "easyocr", "requested": "onnx_ppocr"`.
 rapidocr-onnxruntime==1.2.3
 
+# Renders docs/api-reference.md for the /api-docs route. Declared explicitly
+# even though `rich` already pulls it in: a transitive dependency is not a
+# promise. The same oversight with rapidocr above meant the container ran a
+# different OCR engine from the host for weeks, and here it would be a 500 on a
+# route that works perfectly in development.
+markdown-it-py==4.2.0
+
 # --- Operations ------------------------------------------------------------ #
 structlog==24.4.0
 PyYAML==6.0.2

@@ -236,6 +236,7 @@ def create_app(settings: Settings | None = None) -> Any:
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import JSONResponse
 
+    from hamqadam_ai.api.apidocs import register_api_docs
     from hamqadam_ai.api.routes import register_routes
 
     resolved = settings or get_settings()
@@ -400,6 +401,11 @@ def create_app(settings: Settings | None = None) -> Any:
         )
 
     register_routes(app, _state)
+    # After the API routes, and reading `resolved` rather than the lifespan
+    # state: the reference must be readable while the service is still loading
+    # models or has failed to reach a backend. That is precisely when somebody
+    # is looking up what /ready means.
+    register_api_docs(app, resolved)
     return app
 
 

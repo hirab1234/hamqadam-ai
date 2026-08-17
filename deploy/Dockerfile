@@ -112,6 +112,12 @@ COPY --chown=hamqadam:hamqadam pyproject.toml README.md ./
 # pip cache and force a rebuild of PyTorch.
 COPY --chown=hamqadam:hamqadam scripts/ scripts/
 
+# The API reference the /api-docs route renders. Without it that route is the
+# only thing in the image that works in development and 500s in production -
+# the same shape of defect as the missing scripts/ directory above, which killed
+# model-init, and the undeclared OCR engine, which silently swapped the model.
+COPY --chown=hamqadam:hamqadam docs/ docs/
+
 # Model weights live on a mounted volume, not in the image. Several hundred
 # megabytes of ONNX baked into every layer would make each deploy slow and
 # every rollback expensive, and the weights change on a different cadence from
